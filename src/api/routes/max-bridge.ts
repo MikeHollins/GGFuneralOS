@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { query, queryOne } from '../../db/client';
 import { generatePhaseTasks } from '../../agents/orchestrator/task-scheduler';
 import { logTimeline } from './timeline-helper';
+import { sendSms } from '../../services/twilio';
 
 /**
  * Max Bridge — the API Max uses to interact with GGFuneralOS.
@@ -200,6 +201,21 @@ maxBridgeRouter.get('/overdue', async (_req: Request, res: Response) => {
       message: `${tasks.length} overdue item(s):\n${lines.join('\n')}`,
       tasks,
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Send a text message ────────────────────────────────────────────────────
+// Dashboard + Max: send SMS to a family member or anyone
+
+maxBridgeRouter.post('/send-text', async (req: Request, res: Response) => {
+  try {
+    const { to, body } = req.body;
+    if (!to || !body) return res.status(400).json({ error: 'to and body are required' });
+
+    const sid = await sendSms(to, body);
+    res.json({ success: true, sid });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
