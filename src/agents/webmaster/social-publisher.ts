@@ -1,13 +1,15 @@
 import { query, queryOne } from '../../db/client';
+import { publishToFacebook } from '../../services/social/facebook';
+import { publishToInstagram } from '../../services/social/instagram';
+import { publishToTwitter } from '../../services/social/twitter';
+import { publishToLinkedIn } from '../../services/social/linkedin';
+import { publishToGBP } from '../../services/social/google-business';
 
 /**
  * Social Publisher — Webmaster Agent
  *
- * Publishes posts to Facebook, Instagram, Twitter/X, and LinkedIn.
- * Handles scheduling, publishing, and tracking engagement.
- *
- * API integrations are stubbed — fill in with actual API calls
- * when credentials are configured.
+ * Publishes posts to Facebook, Instagram, Twitter/X, LinkedIn, and Google Business.
+ * All platform APIs are real implementations (gracefully skip if unconfigured).
  */
 
 export async function publishPost(postId: string): Promise<{ success: boolean; platform_post_id?: string; error?: string }> {
@@ -21,10 +23,10 @@ export async function publishPost(postId: string): Promise<{ success: boolean; p
 
     switch (p.platform) {
       case 'FACEBOOK':
-        platformPostId = await publishToFacebook(p.content, p.media_urls);
+        platformPostId = await publishToFacebook(p.content, p.media_urls || []);
         break;
       case 'INSTAGRAM':
-        platformPostId = await publishToInstagram(p.content, p.media_urls);
+        platformPostId = await publishToInstagram(p.content, p.media_urls || []);
         break;
       case 'TWITTER':
         platformPostId = await publishToTwitter(p.content);
@@ -49,6 +51,53 @@ export async function publishPost(postId: string): Promise<{ success: boolean; p
 }
 
 /**
+ * Publish a memorial post to all platforms at once.
+ */
+export async function publishMemorialToAll(
+  caseId: string,
+  content: { facebook: string; instagram: string; twitter: string; linkedin: string },
+  mediaUrls: string[] = []
+): Promise<{ results: Record<string, { success: boolean; id?: string }> }> {
+  const results: Record<string, { success: boolean; id?: string }> = {};
+  const website = process.env.FUNERAL_HOME_WEBSITE || 'https://kcgoldengate.com';
+
+  const platforms = [
+    { platform: 'FACEBOOK', text: content.facebook, fn: publishToFacebook },
+    { platform: 'INSTAGRAM', text: content.instagram, fn: publishToInstagram },
+    { platform: 'TWITTER', text: content.twitter, fn: publishToTwitter },
+    { platform: 'LINKEDIN', text: content.linkedin, fn: publishToLinkedIn },
+  ];
+
+  for (const { platform, text, fn } of platforms) {
+    try {
+      const id = await fn(text, mediaUrls);
+
+      // Record in social_posts table
+      await query(
+        `INSERT INTO social_posts (case_id, platform, content, post_type, cta_url, status, published_at, platform_post_id)
+         VALUES ($1, $2, $3, 'memorial', $4, 'PUBLISHED', now(), $5)`,
+        [caseId, platform, text, website, id || null]
+      );
+
+      results[platform] = { success: true, id };
+    } catch (err: any) {
+      results[platform] = { success: false };
+      console.error(`[webmaster] ${platform} failed: ${err.message}`);
+    }
+  }
+
+  // Also post to Google Business Profile
+  try {
+    const gbpId = await publishToGBP(content.facebook.slice(0, 1500));
+    results['GOOGLE_BUSINESS'] = { success: true, id: gbpId };
+  } catch {
+    results['GOOGLE_BUSINESS'] = { success: false };
+  }
+
+  return { results };
+}
+
+/**
  * Schedule a post for future publication.
  */
 export async function schedulePost(
@@ -70,7 +119,7 @@ export async function schedulePost(
 
 /**
  * Process all posts scheduled for now or earlier.
- * Run on a schedule (every 15 minutes recommended).
+ * Run on a schedule (every 15 minutes).
  */
 export async function processScheduledPosts(): Promise<number> {
   const due = await query(
@@ -87,51 +136,4 @@ export async function processScheduledPosts(): Promise<number> {
     console.log(`[webmaster] Published ${published} scheduled post(s)`);
   }
   return published;
-}
-
-// ─── Platform API Stubs ─────────────────────────────────────────────────────
-// Replace these with actual API calls when credentials are configured.
-
-async function publishToFacebook(content: string, _mediaUrls: any[]): Promise<string | undefined> {
-  const token = process.env.FACEBOOK_PAGE_TOKEN;
-  if (!token) {
-    console.log('[webmaster] Facebook: no token configured — post saved as draft');
-    return undefined;
-  }
-  // TODO: Meta Graph API — POST /v18.0/{page-id}/feed
-  console.log(`[webmaster] Facebook post queued (${content.length} chars)`);
-  return undefined;
-}
-
-async function publishToInstagram(content: string, _mediaUrls: any[]): Promise<string | undefined> {
-  const token = process.env.INSTAGRAM_ACCESS_TOKEN;
-  if (!token) {
-    console.log('[webmaster] Instagram: no token configured — post saved as draft');
-    return undefined;
-  }
-  // TODO: Instagram Graph API — requires media container creation first
-  console.log(`[webmaster] Instagram post queued (${content.length} chars)`);
-  return undefined;
-}
-
-async function publishToTwitter(content: string): Promise<string | undefined> {
-  const apiKey = process.env.TWITTER_API_KEY;
-  if (!apiKey) {
-    console.log('[webmaster] Twitter: no API key configured — post saved as draft');
-    return undefined;
-  }
-  // TODO: Twitter API v2 — POST /2/tweets
-  console.log(`[webmaster] Twitter post queued (${content.length} chars)`);
-  return undefined;
-}
-
-async function publishToLinkedIn(content: string): Promise<string | undefined> {
-  const token = process.env.LINKEDIN_ACCESS_TOKEN;
-  if (!token) {
-    console.log('[webmaster] LinkedIn: no token configured — post saved as draft');
-    return undefined;
-  }
-  // TODO: LinkedIn API — POST /v2/ugcPosts
-  console.log(`[webmaster] LinkedIn post queued (${content.length} chars)`);
-  return undefined;
 }

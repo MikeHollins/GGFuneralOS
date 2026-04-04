@@ -220,3 +220,95 @@ maxBridgeRouter.post('/send-text', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Deploy intake portal for a case ────────────────────────────────────────
+
+maxBridgeRouter.post('/deploy-portal', async (req: Request, res: Response) => {
+  try {
+    const { case_number, last_name } = req.body;
+    let caseRow;
+    if (case_number) caseRow = await queryOne('SELECT * FROM cases WHERE case_number = $1', [case_number]);
+    else if (last_name) caseRow = await queryOne(`SELECT * FROM cases WHERE LOWER(decedent_last_name) = LOWER($1) AND phase != 'ARCHIVED' ORDER BY created_at DESC LIMIT 1`, [last_name]);
+    if (!caseRow) return res.status(404).json({ error: 'Case not found' });
+
+    const c = caseRow as any;
+    const nok = await queryOne('SELECT * FROM case_contacts WHERE case_id = $1 AND is_nok = true LIMIT 1', [c.id]);
+    if (!nok || !(nok as any).phone) return res.status(400).json({ error: 'No NOK contact with phone number' });
+
+    const { createPortalSession } = await import('../../services/portal-tokens');
+    const contact = nok as any;
+    const { portalUrl } = await createPortalSession(c.id, contact.phone, `${contact.first_name} ${contact.last_name || ''}`);
+
+    await sendSms(contact.phone, `Hello ${contact.first_name}, this is KC Golden Gate Funeral Home. Here is your secure link: ${portalUrl}`);
+
+    res.json({ message: `Portal deployed to ${contact.first_name} at ${contact.phone}`, portal_url: portalUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Payment status ─────────────────────────────────────────────────────────
+
+maxBridgeRouter.get('/payment-status', async (_req: Request, res: Response) => {
+  try {
+    const rows = await query(
+      `SELECT case_number, decedent_first_name, decedent_last_name,
+              total_charges, amount_paid, total_charges - amount_paid as balance, payment_status
+       FROM cases WHERE payment_status NOT IN ('PAID') AND total_charges > amount_paid AND phase NOT IN ('FIRST_CALL','ARCHIVED')
+       ORDER BY (total_charges - amount_paid) DESC`
+    );
+    if (rows.length === 0) return res.json({ message: 'All accounts current.' });
+    const total = rows.reduce((s: number, r: any) => s + Number(r.balance || 0), 0);
+    const lines = rows.map((r: any) => `GG-${r.case_number}: ${r.decedent_last_name} — $${Number(r.balance).toFixed(2)} (${r.payment_status})`);
+    res.json({ message: `${rows.length} outstanding ($${total.toFixed(2)} total):\n${lines.join('\n')}`, cases: rows });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Compliance scan on demand ──────────────────────────────────────────────
+
+maxBridgeRouter.get('/compliance-scan', async (_req: Request, res: Response) => {
+  try {
+    const { runComplianceScan, formatAlertsForMax } = await import('../../agents/compliance/compliance-agent');
+    const alerts = await runComplianceScan();
+    res.json({ message: formatAlertsForMax(alerts), alerts, count: alerts.length });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Insurance claims summary ───────────────────────────────────────────────
+
+maxBridgeRouter.get('/insurance-status', async (_req: Request, res: Response) => {
+  try {
+    const rows = await query(
+      `SELECT ic.insurer_name, ic.policy_number, ic.assigned_amount, ic.status, ic.date_filed,
+              c.case_number, c.decedent_last_name
+       FROM insurance_claims ic JOIN cases c ON c.id = ic.case_id
+       WHERE ic.status NOT IN ('paid','denied') ORDER BY ic.date_filed NULLS FIRST`
+    );
+    if (rows.length === 0) return res.json({ message: 'No pending insurance claims.' });
+    const lines = rows.map((r: any) => {
+      const days = r.date_filed ? Math.floor((Date.now() - new Date(r.date_filed).getTime()) / 86400000) : 0;
+      return `GG-${r.case_number} (${r.decedent_last_name}): ${r.insurer_name} — $${Number(r.assigned_amount || 0).toFixed(2)} — ${r.status} (${days}d)`;
+    });
+    res.json({ message: `${rows.length} pending:\n${lines.join('\n')}`, claims: rows });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Generate program ───────────────────────────────────────────────────────
+
+maxBridgeRouter.post('/generate-program', async (req: Request, res: Response) => {
+  try {
+    const { case_number, last_name, template } = req.body;
+    let caseRow;
+    if (case_number) caseRow = await queryOne('SELECT * FROM cases WHERE case_number = $1', [case_number]);
+    else if (last_name) caseRow = await queryOne(`SELECT * FROM cases WHERE LOWER(decedent_last_name) = LOWER($1) AND phase != 'ARCHIVED' ORDER BY created_at DESC LIMIT 1`, [last_name]);
+    if (!caseRow) return res.status(404).json({ error: 'Case not found' });
+    const c = caseRow as any;
+    const obit = await queryOne('SELECT * FROM obituaries WHERE case_id = $1 ORDER BY version DESC LIMIT 1', [c.id]);
+    const { getTemplate, suggestTemplate } = await import('../../agents/design/template-registry');
+    const tmpl = template ? getTemplate(template) : suggestTemplate(c);
+    if (!tmpl) return res.status(400).json({ error: `Template not found: ${template}` });
+    const pdfBuffer = await tmpl.render(c, obit as any);
+    await logTimeline(c.id, 'program_generated', `Program generated: ${tmpl.name}`, 'design-agent');
+    res.json({ message: `Program generated: "${tmpl.name}" for GG-${c.case_number}`, template: tmpl.name, size: pdfBuffer.length });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
