@@ -71,13 +71,24 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// ─── Static files (chat widget) ─────────────────────────────────────────────
+import * as path from 'path';
+app.use('/public', express.static(path.join(__dirname, '..', 'public')));
+
 // ─── Start Server ───────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+import { createServer } from 'http';
+import { initChatServer } from './services/chat-server';
+
+const httpServer = createServer(app);
+initChatServer(httpServer);
+
+httpServer.listen(PORT, () => {
   console.log(`[ggfuneralos] ✅ Server running on http://localhost:${PORT}`);
   console.log(`[ggfuneralos] Dashboard: http://localhost:3000`);
   console.log(`[ggfuneralos] API: http://localhost:${PORT}/api`);
   console.log(`[ggfuneralos] Max Bridge: http://localhost:${PORT}/api/max`);
   console.log(`[ggfuneralos] Portal: http://localhost:3000/portal/{token}`);
+  console.log(`[ggfuneralos] Chat widget: http://localhost:${PORT}/public/chat-widget.js`);
 
   // ─── Start Cron Jobs ────────────────────────────────────────────────────
   startCronJobs(async (to, body) => { await sendSms(to, body); });
