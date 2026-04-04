@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const NAV_ITEMS = [
   { href: '/', label: 'Cases', icon: '📋' },
   { href: '/calendar', label: 'Calendar', icon: '📅' },
+  { href: '/payments', label: 'Payments', icon: '💳' },
   { href: '/metrics', label: 'Metrics', icon: '📊' },
   { href: '/aftercare', label: 'Aftercare', icon: '💛' },
   { href: '/texts', label: 'Texts', icon: '💬' },
@@ -45,7 +46,7 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="px-5 py-4 border-t border-white/10 text-xs text-white/30">
-        GGFuneralOS v0.1
+        GGFuneralOS v0.2
       </div>
     </aside>
   );

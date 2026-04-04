@@ -13,6 +13,7 @@ import { authRouter } from './api/routes/auth';
 import { portalRouter } from './api/routes/portal';
 import { paymentsRouter } from './api/routes/payments';
 import { docusignRouter } from './api/routes/docusign';
+import { publicProgramRouter } from './api/routes/public-program';
 import { smsWebhookRouter } from './api/routes/sms-webhook';
 
 // ─── Services ───────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ app.use('/api/sms', express.urlencoded({ extended: false }));
 // ─── Public Routes (no auth) ────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/portal', portalRouter);
+app.use('/program', publicProgramRouter); // QR-accessible program viewer — no /api prefix for clean URLs
 app.use('/api/sms', smsWebhookRouter);
 app.use('/api/payments/webhook', paymentsRouter); // Stripe webhook
 app.use('/api/docusign/webhook', docusignRouter); // DocuSign Connect webhook
