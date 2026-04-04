@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: '/calendar', label: 'Calendar', icon: '📅' },
   { href: '/payments', label: 'Payments', icon: '💳' },
   { href: '/metrics', label: 'Metrics', icon: '📊' },
+  { href: '/chat', label: 'Live Chat', icon: '🗨️' },
   { href: '/aftercare', label: 'Aftercare', icon: '💛' },
   { href: '/texts', label: 'Texts', icon: '💬' },
 ];
