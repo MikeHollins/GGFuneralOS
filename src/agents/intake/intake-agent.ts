@@ -137,7 +137,37 @@ export async function handleIncomingSms(
     session.completed = true;
     await sendSms(phoneNumber, INTAKE_COMPLETION);
     await logConversation(session.case_id, phoneNumber, 'outbound', INTAKE_COMPLETION);
-    console.log(`[intake-agent] Completed intake for case ${session.case_id}`);
+
+    // Report completion stats
+    const { getCompletionStats } = await import('./intake-fields');
+    const stats = getCompletionStats(session.collected_fields);
+    console.log(`[intake-agent] Completed intake for case ${session.case_id}: ${stats.completed}/${stats.total} fields, death cert complete: ${stats.deathCertComplete}`);
+    return true;
+  }
+
+  // If the next field redirects to portal, send the portal link and mark as attempted
+  if (nextField.redirect_to_portal) {
+    session.current_field = nextField.id;
+    session.collected_fields.add(nextField.id); // mark as attempted (collected via portal)
+
+    // Send the prompt + portal URL
+    const portalUrl = (session as any).portalUrl;
+    const portalMessage = portalUrl
+      ? `${nextField.prompt}\n\nSecure link: ${portalUrl}`
+      : nextField.prompt;
+    await sendSms(phoneNumber, portalMessage);
+    await logConversation(session.case_id, phoneNumber, 'outbound', portalMessage, nextField.id);
+
+    // Immediately move to the next non-portal field
+    const nextNonPortal = getNextField(session.collected_fields);
+    if (nextNonPortal && !nextNonPortal.redirect_to_portal) {
+      session.current_field = nextNonPortal.id;
+      // Small delay so messages don't pile up
+      setTimeout(async () => {
+        await sendSms(phoneNumber, nextNonPortal.prompt);
+        await logConversation(session.case_id, phoneNumber, 'outbound', nextNonPortal.prompt, nextNonPortal.id);
+      }, 2000);
+    }
     return true;
   }
 
