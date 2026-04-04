@@ -12,7 +12,16 @@ interface PortalSession {
   scheduled_date: string | null;
 }
 
-const FIELD_SECTIONS = [
+interface FieldDef {
+  id: string;
+  label: string;
+  type: string;
+  placeholder?: string;
+  options?: string[];
+  inputMode?: string;
+}
+
+const FIELD_SECTIONS: { title: string; subtitle?: string; fields: FieldDef[] }[] = [
   {
     title: 'Personal Information',
     fields: [

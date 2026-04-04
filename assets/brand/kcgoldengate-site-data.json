@@ -1,0 +1,79 @@
+{
+  "business": {
+    "name": "Golden Gate Funeral & Cremation Services",
+    "legal_name": "KC Golden Gate Funeral Home",
+    "address": "2800 E 18th St, Kansas City, MO 64127",
+    "phone_main": "(816) 231-GATE / (816) 231-4283",
+    "phone_secondary": "(816) 368-8409",
+    "phone_alt": "(816) 255-3676",
+    "email": "info@kcgoldengate.com",
+    "website": "https://kcgoldengate.com",
+    "tagline": "Exchanging Your Grief for a Golden Experience",
+    "motto": "We know that relationships are irreplaceable and precious memories are priceless"
+  },
+  "brand_colors": {
+    "primary_gold": "#efb70c",
+    "gold_dark": "#d2a006",
+    "gold_accent": "#ffc000",
+    "gold_warm": "#e0a901",
+    "text_dark": "#000000",
+    "text_body": "#666666",
+    "text_muted": "#787878",
+    "bg_light": "#faf9f9",
+    "bg_section": "#eeeeee",
+    "white": "#ffffff"
+  },
+  "social_media": {
+    "facebook": "https://facebook.com/kcgoldengate",
+    "twitter": "https://twitter.com/GGateFuneral",
+    "youtube": "https://youtube.com/channel/featured",
+    "instagram": null,
+    "linkedin": null
+  },
+  "logo_url": "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/100152-1920w.png",
+  "hero_images": [
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/rotator01-1920w.jpg",
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/DSC_2578a-1920w.jpg",
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/rotator02-1920w.jpg",
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/20170824_122647-1920w.jpg",
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/DSC_2569-1920w.jpg",
+    "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/DSC_2587-1ad6475e-1920w.jpg"
+  ],
+  "staff": [
+    {
+      "name": "DiMond Piggie",
+      "title": "Chief Operations Officer; Licensed Funeral Director-KS, MO; Licensed Insurance Agent",
+      "photo_url": "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/dimond_bio-1920w.jpg"
+    },
+    {
+      "name": "Angela D. Husband",
+      "title": "Missouri Licensed Funeral Director",
+      "photo_url": "https://lirp.cdn-website.com/398cdf00/dms3rep/multi/opt/angela_bio-1920w.jpg"
+    }
+  ],
+  "packages": [
+    { "name": "The Direct", "price": 845, "type": "cremation", "savings": 2315, "includes_casket": false, "includes_service": false, "description": "Basic cremation with dignity" },
+    { "name": "The Memorial", "price": 1995, "type": "cremation", "savings": 1950, "includes_casket": false, "includes_service": true, "description": "Memorial service, body not present" },
+    { "name": "The Noble", "price": 4500, "type": "cremation", "savings": 1495, "includes_casket": true, "casket_type": "rental", "includes_service": true, "description": "Cremation with embalming + 1hr visitation" },
+    { "name": "The Formal", "price": 4750, "type": "burial", "savings": null, "includes_casket": false, "includes_service": true, "description": "Traditional funeral + graveside" },
+    { "name": "The Prestige", "price": 5950, "type": "burial", "savings": 1450, "includes_casket": true, "casket_max_value": 1100, "includes_service": true, "description": "Enhanced funeral with casket up to $1,100" },
+    { "name": "The Gold", "price": 6995, "type": "burial", "savings": 1735, "includes_casket": true, "casket_max_value": 1500, "includes_service": true, "description": "2hr visitation + family car + casket up to $1,500" },
+    { "name": "The Imperial", "price": 8500, "type": "burial", "savings": 2075, "includes_casket": true, "casket_max_value": 2200, "includes_service": true, "description": "DVD tribute + standing floral + 2 family cars" },
+    { "name": "The Royal", "price": 11500, "type": "burial", "savings": 2587, "includes_casket": true, "casket_max_value": 3000, "includes_service": true, "description": "Horse & carriage, Sprinter van, dove release — the complete experience" }
+  ],
+  "site_pages": [
+    "/", "/our-mission", "/our-staff", "/our-prices", "/our-packages",
+    "/our-location", "/photo-gallery", "/why-choose-us", "/contact-us",
+    "/obituaries", "/send-flowers", "/obituaries/email--subscribe", "/calendar",
+    "/services/services-overview", "/traditional-services", "/cremation-services",
+    "/personalization", "/veterans-services", "/merchandise", "/urn-catalog",
+    "/planning-ahead", "/online-preplanning-form", "/pre-planning-checklist",
+    "/talk-of-a-lifetime", "/the-grieving-process", "/grief-resources",
+    "/children-grief", "/frequent-questions", "/social-security-benefits",
+    "/funeral-etiquette", "/when-death-occurs", "/prayer-requests",
+    "/community-news", "/helping-hands", "/partners", "/make-a-payment74eb7a7f",
+    "/privacy-policy", "/terms-of-use"
+  ],
+  "cms_platform": "Duda (DudaOne)",
+  "obituary_platform": "Tukios"
+}
