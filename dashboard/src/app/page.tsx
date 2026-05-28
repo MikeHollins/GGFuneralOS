@@ -1,8 +1,14 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { getOperationalStatuses, getOperationsFeed, saveOperationalStatus, syncWeeklyServiceSchedule, updateOperationItem, type OperationsFeed } from '@/lib/api';
-import { type DashboardItem } from '@/lib/operation-items';
+import {
+  getOperationalStatuses,
+  getOperationsFeed,
+  saveOperationalStatus,
+  syncWeeklyServiceSchedule,
+  type OperationsFeed,
+} from '@/lib/api';
+import { type DashboardItem, type OperationArea } from '@/lib/operation-items';
 
 type AuditEntry = {
   kind: 'status' | 'edit';
@@ -24,204 +30,88 @@ type StatusOverride = {
 };
 
 type SourceHealth = OperationsFeed['sources'][number];
+type ViewId = 'today' | 'cases' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
 
-type SheetTab = {
-  id: string;
+type MenuEntry = {
   label: string;
-  source?: string;
-  sourcePrefix?: string;
-  area?: DashboardItem['area'];
+  value: string;
+  source: string;
 };
 
-type SheetColumn = {
-  label: string;
-  keys: string[];
-  fallback?: 'label' | 'detail' | 'owner' | 'due' | 'source';
-  className?: string;
+type CaseRecord = {
+  key: string;
+  name: string;
+  items: DashboardItem[];
+  primaryItem: DashboardItem;
+  statusItem: DashboardItem;
+  dateEntries: MenuEntry[];
+  locationEntries: MenuEntry[];
+  owner: string;
+  nextAction: string;
+  blocker: string;
+  updatedAt: string;
+  areaCounts: Partial<Record<OperationArea, number>>;
+  searchText: string;
 };
 
-const tabs: SheetTab[] = [
-  { id: 'schedule', label: 'Weekly Service Schedule', source: 'Weekly Service Schedule' },
-  { id: 'arrangements', label: 'Arrangements', source: 'Arrangements' },
-  { id: 'death-certificates-2026', label: 'Death Certificate 2026', source: 'Death Certificate 2026' },
-  { id: 'death-certificates-2025', label: 'Death Certificate 2025', source: 'Death Certificate 2025' },
-  { id: 'cremains', label: 'Cremains Log', source: 'Cremains Log' },
-  { id: 'picked-up-cremains', label: 'Picked Up Cremains Log', source: 'Picked UP Cremains Log' },
-  { id: 'crematory-2026', label: '2026 Crematory Log', source: '2026 Crematory Log' },
-  { id: 'crematory-2025', label: '2025 Crematory Log', source: '2025 Crematory Log' },
-  { id: 'belongings', label: 'Belongings', source: 'Belongings' },
-  { id: 'server-packages', label: 'Server Packages', source: 'SMB: Funeral Packages' },
-  { id: 'server-production', label: 'Server Production Files', area: 'production', sourcePrefix: 'SMB:' },
-  { id: 'server-paperwork', label: 'Server Paperwork', area: 'paperwork', sourcePrefix: 'SMB:' },
+const viewLabels: Record<ViewId, string> = {
+  today: 'Today',
+  cases: 'Cases',
+  arrangements: 'Arrangements',
+  'death-certs': 'Death Certs',
+  cremains: 'Cremains',
+  belongings: 'Belongings',
+  files: 'Files',
+};
+
+const dateGroups: Array<{ label: string; keys: string[] }> = [
+  { label: 'Arrangement', keys: ['arrangement_date', 'appointment_date', 'appointment_time'] },
+  { label: 'Visitation', keys: ['visitation_date', 'visitation_time'] },
+  { label: 'Service', keys: ['service_date', 'service_time', 'date', 'time'] },
+  { label: 'Committal', keys: ['committal_date', 'committal_time'] },
+  { label: 'Cremation', keys: ['cremation_date', 'date_of_cremation'] },
+  { label: 'Cremains returned', keys: ['date_of_return', 'return_date'] },
+  { label: 'Pickup', keys: ['pick_up_date', 'pickup_date', 'release_date'] },
+  { label: 'Death cert', keys: ['date_of_death', 'death_date', 'date_sent', 'sent', 'date_filed', 'filed'] },
+  { label: 'File', keys: ['modified_at'] },
 ];
 
-const defaultColumns: SheetColumn[] = [
-  { label: 'Name', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-  { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-  { label: 'Date / Time', keys: ['date', 'service_date', 'arrangement_date', 'time', 'service_time', 'appointment_time'], fallback: 'due' },
-  { label: 'Staff / Receiver', keys: ['lead', 'lead_lady', 'director', 'arranger', 'staff', 'receiver', 'signature_of_receiver'], fallback: 'owner' },
-  { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
+const locationGroups: Array<{ label: string; keys: string[] }> = [
+  { label: 'Service place', keys: ['service_location', 'location', 'chapel', 'church'] },
+  { label: 'Cemetery', keys: ['cemetery', 'cemetery_name', 'committal_location'] },
+  { label: 'Arrangement place', keys: ['arrangement_location', 'appointment_location'] },
+  { label: 'Crematory', keys: ['crematory', 'crematory_name'] },
+  { label: 'Cremains storage', keys: ['storage_location'] },
+  { label: 'Belongings storage', keys: ['property_location', 'belongings_location'] },
+  { label: 'Doctor / facility', keys: ['doctor', 'physician', 'certifier', 'facility', 'place_of_death_facility'] },
+  { label: 'Server folder', keys: ['top_level', 'parent_path', 'relative_path'] },
 ];
 
-const columnsByTab: Record<string, SheetColumn[]> = {
-  schedule: [
-    { label: 'Date', keys: ['date', 'service_date'], fallback: 'due' },
-    { label: 'Time', keys: ['time', 'service_time'] },
-    { label: 'Deceased', keys: ['deceased', 'name_of_deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Service', keys: ['service', 'service_type', 'type'] },
-    { label: 'Location', keys: ['location', 'service_location', 'chapel'] },
-    { label: 'Cemetery', keys: ['cemetery'] },
-    { label: 'Casket', keys: ['casket'] },
-    { label: 'Flowers', keys: ['flowers'] },
-    { label: 'Programs', keys: ['programs', 'program'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  arrangements: [
-    { label: 'Appointment date', keys: ['appointment_date', 'arrangement_date', 'date'], fallback: 'due' },
-    { label: 'Time', keys: ['appointment_time', 'time'] },
-    { label: 'Deceased', keys: ['deceased', 'name_of_deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Family / Contact', keys: ['family', 'contact', 'next_of_kin', 'nok', 'phone', 'cell'] },
-    { label: 'Arranger', keys: ['arranger', 'director', 'staff'], fallback: 'owner' },
-    { label: 'Package / Payment', keys: ['package', 'payment', 'paid', 'balance'] },
-    { label: 'Contract', keys: ['contract', 'contract_signed'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'death-certificates-2026': [
-    { label: 'Deceased', keys: ['deceased', 'name_of_deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Date of death', keys: ['date_of_death', 'death_date'], fallback: 'due' },
-    { label: 'Doctor / Certifier', keys: ['doctor', 'physician', 'certifier'], fallback: 'owner' },
-    { label: 'Called', keys: ['called', 'doctor_called'] },
-    { label: 'Sent', keys: ['sent', 'date_sent'] },
-    { label: 'Filed', keys: ['filed', 'date_filed'] },
-    { label: 'Permit', keys: ['permit', 'burial_permit'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'death-certificates-2025': [
-    { label: 'Deceased', keys: ['deceased', 'name_of_deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Date of death', keys: ['date_of_death', 'death_date'], fallback: 'due' },
-    { label: 'Doctor / Certifier', keys: ['doctor', 'physician', 'certifier'], fallback: 'owner' },
-    { label: 'Called', keys: ['called', 'doctor_called'] },
-    { label: 'Sent', keys: ['sent', 'date_sent'] },
-    { label: 'Filed', keys: ['filed', 'date_filed'] },
-    { label: 'Permit', keys: ['permit', 'burial_permit'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  cremains: [
-    { label: 'Deceased', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Date returned', keys: ['date_of_return', 'return_date'], fallback: 'due' },
-    { label: 'Location', keys: ['location', 'storage_location'] },
-    { label: 'Paid', keys: ['paid', 'payment'] },
-    { label: 'Authorized pickup', keys: ['authorized_pickup', 'authorization'] },
-    { label: 'Receiver', keys: ['receiver', 'signature_of_receiver'], fallback: 'owner' },
-    { label: 'Pickup date', keys: ['pick_up_date', 'pickup_date'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'picked-up-cremains': [
-    { label: 'Deceased', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Pickup date', keys: ['pick_up_date', 'pickup_date', 'date'], fallback: 'due' },
-    { label: 'Receiver', keys: ['receiver', 'signature_of_receiver'], fallback: 'owner' },
-    { label: 'Paid', keys: ['paid', 'payment'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'crematory-2026': [
-    { label: 'Date', keys: ['cremation_date', 'date', 'date_of_cremation'], fallback: 'due' },
-    { label: 'Deceased', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Operator', keys: ['operator', 'staff', 'director'], fallback: 'owner' },
-    { label: 'Permit', keys: ['permit', 'cremation_permit'] },
-    { label: 'Authorization', keys: ['authorization', 'cremation_authorization'] },
-    { label: 'Return date', keys: ['return_date', 'date_of_return'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'crematory-2025': [
-    { label: 'Date', keys: ['cremation_date', 'date', 'date_of_cremation'], fallback: 'due' },
-    { label: 'Deceased', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Operator', keys: ['operator', 'staff', 'director'], fallback: 'owner' },
-    { label: 'Permit', keys: ['permit', 'cremation_permit'] },
-    { label: 'Authorization', keys: ['authorization', 'cremation_authorization'] },
-    { label: 'Return date', keys: ['return_date', 'date_of_return'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  belongings: [
-    { label: 'Deceased', keys: ['name_of_deceased', 'deceased', 'name'], fallback: 'label', className: 'min-w-56' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Items', keys: ['items', 'item', 'property', 'belongings'], className: 'min-w-72' },
-    { label: 'Storage location', keys: ['storage_location', 'location'] },
-    { label: 'Released to', keys: ['released_to', 'receiver'], fallback: 'owner' },
-    { label: 'Release date', keys: ['release_date', 'pick_up_date', 'pickup_date', 'date'], fallback: 'due' },
-    { label: 'Signature', keys: ['signature', 'signature_of_receiver'] },
-    { label: 'Notes', keys: ['notes', 'note', 'remarks', 'comments'], className: 'min-w-72' },
-  ],
-  'server-packages': [
-    { label: 'File', keys: ['name'], fallback: 'label', className: 'min-w-64' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Folder', keys: ['parent_path'], fallback: 'source', className: 'min-w-56' },
-    { label: 'Type', keys: ['extension', 'item_type'] },
-    { label: 'Size', keys: ['size_bytes'] },
-    { label: 'Modified', keys: ['modified_at'], fallback: 'due', className: 'min-w-44' },
-    { label: 'Path', keys: ['relative_path'], className: 'min-w-96' },
-  ],
-  'server-production': [
-    { label: 'File', keys: ['name'], fallback: 'label', className: 'min-w-64' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Source folder', keys: ['top_level'], fallback: 'source', className: 'min-w-48' },
-    { label: 'Folder', keys: ['parent_path'], className: 'min-w-56' },
-    { label: 'Type', keys: ['extension', 'item_type'] },
-    { label: 'Modified', keys: ['modified_at'], fallback: 'due', className: 'min-w-44' },
-    { label: 'Path', keys: ['relative_path'], className: 'min-w-96' },
-  ],
-  'server-paperwork': [
-    { label: 'File', keys: ['name'], fallback: 'label', className: 'min-w-64' },
-    { label: 'Match key', keys: ['case_match_key'], className: 'min-w-44' },
-    { label: 'Source folder', keys: ['top_level'], fallback: 'source', className: 'min-w-48' },
-    { label: 'Folder', keys: ['parent_path'], className: 'min-w-56' },
-    { label: 'Type', keys: ['extension', 'item_type'] },
-    { label: 'Modified', keys: ['modified_at'], fallback: 'due', className: 'min-w-44' },
-    { label: 'Path', keys: ['relative_path'], className: 'min-w-96' },
-  ],
+const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
+  today: null,
+  cases: null,
+  arrangements: ['arrangement'],
+  'death-certs': ['death-cert'],
+  cremains: ['cremains', 'crematory'],
+  belongings: ['belongings'],
+  files: ['smb', 'production', 'paperwork'],
 };
 
-function priorityClass(priority: DashboardItem['priority']) {
-  if (priority === 'critical') return 'border-l-red-600 bg-red-50/70';
-  if (priority === 'high') return 'border-l-amber-500 bg-amber-50/60';
-  if (priority === 'done') return 'border-l-emerald-600 bg-emerald-50/60';
-  return 'border-l-neutral-300 bg-white';
+function sourcePayload(item: DashboardItem) {
+  return item.sourcePayload ?? {};
 }
 
-function statusTone(status: string) {
-  const lower = status.toLowerCase();
-  if (lower.includes('missing') || lower.includes('needs') || lower.includes('not started')) {
-    return 'border-red-200 bg-red-50 text-red-800';
-  }
-  if (lower.includes('pending') || lower.includes('called') || lower.includes('requested') || lower.includes('needed')) {
-    return 'border-amber-200 bg-amber-50 text-amber-900';
-  }
-  if (lower.includes('ready') || lower.includes('proof') || lower.includes('confirmed')) {
-    return 'border-blue-200 bg-blue-50 text-blue-900';
-  }
-  if (lower.includes('complete') || lower.includes('filed') || lower.includes('picked') || lower.includes('published') || lower.includes('verified')) {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  }
-  if (lower.includes('approved') || lower.includes('printed') || lower.includes('design')) {
-    return 'border-purple-200 bg-purple-50 text-purple-800';
-  }
-  return 'border-neutral-200 bg-neutral-50 text-neutral-800';
+function normalizeKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b(jr|sr|ii|iii|iv)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function displayKey(key: string) {
-  return key
-    .replace(/^_/, '')
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+function cleanDisplay(value: unknown) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
 function safeFieldValue(key: string, value: string) {
@@ -242,51 +132,37 @@ function safeFieldValue(key: string, value: string) {
   return trimmed;
 }
 
-function sourcePayload(item: DashboardItem) {
-  return item.sourcePayload ?? {};
+function displayKey(key: string) {
+  return key
+    .replace(/^_/, '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
-function sourceEntries(item: DashboardItem) {
-  return Object.entries(sourcePayload(item))
-    .filter(([key, value]) => !key.startsWith('_') && String(value ?? '').trim())
-    .map(([key, value]) => [key, safeFieldValue(key, String(value))] as const);
-}
-
-function fallbackValue(item: DashboardItem, fallback?: SheetColumn['fallback']) {
-  if (!fallback) return '';
-  if (fallback === 'source') return item.source;
-  return item[fallback] ?? '';
-}
-
-function valueForColumn(item: DashboardItem, column: SheetColumn) {
-  const payload = sourcePayload(item);
-  for (const key of column.keys) {
-    const value = payload[key]?.trim();
-    if (value) return safeFieldValue(key, value);
+function statusTone(status: string) {
+  const lower = status.toLowerCase();
+  if (lower.includes('missing') || lower.includes('needs') || lower.includes('not started')) {
+    return 'border-red-200 bg-red-50 text-red-800';
   }
-  return fallbackValue(item, column.fallback);
-}
-
-function itemMatchesTab(item: DashboardItem, tab: SheetTab) {
-  if (tab.source && item.source.trim() !== tab.source) return false;
-  if (tab.sourcePrefix && !item.source.trim().startsWith(tab.sourcePrefix)) return false;
-  if (tab.area && item.area !== tab.area) return false;
-  if (tab.source || tab.sourcePrefix || tab.area) return true;
-  return true;
-}
-
-function columnsForTab(tabId: string, rows: DashboardItem[]): SheetColumn[] {
-  const configured = columnsByTab[tabId] ?? defaultColumns;
-  if (configured.length) return configured;
-
-  const seen = new Set<string>();
-  for (const item of rows) {
-    for (const [key] of sourceEntries(item)) {
-      if (seen.size >= 8) break;
-      seen.add(key);
-    }
+  if (lower.includes('pending') || lower.includes('called') || lower.includes('requested') || lower.includes('needed')) {
+    return 'border-amber-200 bg-amber-50 text-amber-900';
   }
-  return [...seen].map((key) => ({ label: displayKey(key), keys: [key] }));
+  if (lower.includes('ready') || lower.includes('proof') || lower.includes('confirmed')) {
+    return 'border-blue-200 bg-blue-50 text-blue-900';
+  }
+  if (lower.includes('complete') || lower.includes('filed') || lower.includes('picked') || lower.includes('published') || lower.includes('verified')) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  }
+  return 'border-neutral-200 bg-neutral-50 text-neutral-800';
+}
+
+function priorityRank(item: DashboardItem) {
+  if (item.priority === 'critical') return 4;
+  if (item.priority === 'high') return 3;
+  if (item.priority === 'normal') return 2;
+  return 1;
 }
 
 function sourceRowLabel(item: DashboardItem) {
@@ -303,6 +179,158 @@ function formatStamp(value: string) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(date);
+}
+
+function itemName(item: DashboardItem) {
+  const payload = sourcePayload(item);
+  return (
+    cleanDisplay(payload.name_of_deceased) ||
+    cleanDisplay(payload.deceased) ||
+    cleanDisplay(payload.name) ||
+    cleanDisplay(item.label) ||
+    'Unknown'
+  );
+}
+
+function caseKeyForItem(item: DashboardItem) {
+  const payload = sourcePayload(item);
+  const matchKey = cleanDisplay(payload.case_match_key);
+  if (matchKey) return matchKey;
+  return normalizeKey(itemName(item)) || item.id;
+}
+
+function compactValues(item: DashboardItem, keys: string[]) {
+  const payload = sourcePayload(item);
+  return keys.map((key) => safeFieldValue(key, cleanDisplay(payload[key]))).filter(Boolean);
+}
+
+function collectGroupedEntries(item: DashboardItem, groups: Array<{ label: string; keys: string[] }>) {
+  const entries: MenuEntry[] = [];
+  for (const group of groups) {
+    const values = compactValues(item, group.keys);
+    if (values.length) {
+      entries.push({
+        label: group.label,
+        value: Array.from(new Set(values)).join(' / '),
+        source: item.source,
+      });
+    }
+  }
+  if (!entries.length && item.due) {
+    entries.push({ label: 'Dashboard due', value: item.due, source: item.source });
+  }
+  return entries;
+}
+
+function collectTextEntries(item: DashboardItem) {
+  return Object.entries(sourcePayload(item))
+    .filter(([key, value]) => !key.startsWith('_') && cleanDisplay(value))
+    .map(([key, value]) => [key, safeFieldValue(key, cleanDisplay(value))] as const);
+}
+
+function ownerFor(items: DashboardItem[]) {
+  return items.find((item) => item.owner && item.owner !== 'Staff')?.owner || items[0]?.owner || 'Staff';
+}
+
+function nextActionFor(items: DashboardItem[]) {
+  const urgent = [...items].sort((a, b) => priorityRank(b) - priorityRank(a))[0];
+  if (!urgent) return 'Review case';
+  const status = urgent.status.toLowerCase();
+  if (status.includes('not started') || status.includes('needs') || status.includes('missing')) return `Resolve ${urgent.source}`;
+  if (status.includes('pending') || status.includes('called') || status.includes('requested')) return `Follow up on ${urgent.source}`;
+  if (urgent.area === 'death-cert') return 'Check death certificate';
+  if (urgent.area === 'cremains' || urgent.area === 'crematory') return 'Check cremains status';
+  if (urgent.area === 'belongings') return 'Check belongings release';
+  if (urgent.source.startsWith('SMB:')) return 'Review related file';
+  return urgent.detail || 'Review case';
+}
+
+function blockerFor(items: DashboardItem[]) {
+  const blockingWords = ['hold', 'missing', 'needed', 'tbd', 'pending', 'waiting', 'incomplete'];
+  for (const item of items) {
+    const text = `${item.status} ${item.detail} ${Object.values(sourcePayload(item)).join(' ')}`.toLowerCase();
+    if (blockingWords.some((word) => text.includes(word))) {
+      return item.status.includes('Complete') || item.status.includes('Filed') ? 'None' : item.status;
+    }
+  }
+  return 'None';
+}
+
+function lastUpdatedFor(items: DashboardItem[], auditEntries: AuditEntry[]) {
+  const itemIds = new Set(items.map((item) => item.id));
+  const audit = auditEntries.find((entry) => itemIds.has(entry.itemId));
+  if (audit) return formatStamp(audit.changedAt);
+
+  const modified = items
+    .map((item) => cleanDisplay(sourcePayload(item).modified_at))
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  if (modified) return safeFieldValue('modified_at', modified);
+  return 'No staff edits';
+}
+
+function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
+  const groups = new Map<string, DashboardItem[]>();
+  for (const item of items) {
+    const key = caseKeyForItem(item);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+
+  return Array.from(groups.entries()).map(([key, groupedItems]) => {
+    const sortedItems = [...groupedItems].sort((a, b) => priorityRank(b) - priorityRank(a));
+    const primaryItem = sortedItems[0];
+    const statusItem = sortedItems.find((item) => item.area !== 'paperwork' && !item.source.startsWith('SMB:')) ?? primaryItem;
+    const dateEntries = sortedItems.flatMap((item) => collectGroupedEntries(item, dateGroups));
+    const locationEntries = sortedItems.flatMap((item) => collectGroupedEntries(item, locationGroups));
+    const areaCounts = sortedItems.reduce<Partial<Record<OperationArea, number>>>((counts, item) => {
+      counts[item.area] = (counts[item.area] ?? 0) + 1;
+      return counts;
+    }, {});
+
+    const record: CaseRecord = {
+      key,
+      name: itemName(statusItem),
+      items: sortedItems,
+      primaryItem,
+      statusItem,
+      dateEntries,
+      locationEntries,
+      owner: ownerFor(sortedItems),
+      nextAction: nextActionFor(sortedItems),
+      blocker: blockerFor(sortedItems),
+      updatedAt: lastUpdatedFor(sortedItems, auditEntries),
+      areaCounts,
+      searchText: '',
+    };
+
+    record.searchText = [
+      record.name,
+      record.owner,
+      record.nextAction,
+      record.blocker,
+      key,
+      ...sortedItems.flatMap((item) => [item.label, item.detail, item.source, item.sourceRef ?? '', ...Object.values(sourcePayload(item))]),
+    ].join(' ').toLowerCase();
+    return record;
+  });
+}
+
+function recordMatchesView(record: CaseRecord, view: ViewId) {
+  if (view === 'today' || view === 'cases') return true;
+  const filters = viewAreaFilters[view];
+  if (!filters) return true;
+  return record.items.some((item) => filters.includes(item.area) || (filters.includes('smb') && item.source.startsWith('SMB:')));
+}
+
+function readinessBadges(record: CaseRecord) {
+  return [
+    { label: 'Arr', active: Boolean(record.areaCounts.arrangement), tone: 'bg-blue-50 text-blue-800 border-blue-200' },
+    { label: 'DC', active: Boolean(record.areaCounts['death-cert']), tone: 'bg-red-50 text-red-800 border-red-200' },
+    { label: 'Crem', active: Boolean(record.areaCounts.cremains || record.areaCounts.crematory), tone: 'bg-amber-50 text-amber-900 border-amber-200' },
+    { label: 'Bel', active: Boolean(record.areaCounts.belongings), tone: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+    { label: 'Files', active: record.items.some((item) => item.source.startsWith('SMB:')), tone: 'bg-neutral-100 text-neutral-700 border-neutral-200' },
+  ];
 }
 
 function StatusChip({
@@ -357,20 +385,21 @@ function StatusChip({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={`${controlId}-menu`}
-        onClick={() => {
+        onClick={(event) => {
+          event.stopPropagation();
           const rect = triggerRef.current?.getBoundingClientRect();
           if (rect) {
             setMenuPosition({
-              top: rect.bottom + 8,
+              top: rect.bottom + 6,
               left: Math.max(12, Math.min(rect.right - 288, window.innerWidth - 304)),
             });
           }
           setNextStatus(currentStatus);
           setOpen((value) => !value);
         }}
-        className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold leading-none shadow-sm transition hover:-translate-y-px hover:shadow ${statusTone(currentStatus)}`}
+        className={`inline-flex h-6 max-w-36 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold leading-none shadow-sm transition hover:shadow ${statusTone(currentStatus)}`}
       >
-        <span>{currentStatus}</span>
+        <span className="truncate">{currentStatus}</span>
         {override?.initials ? <span className="rounded bg-white/70 px-1 text-[10px]">{override.initials}</span> : null}
       </button>
 
@@ -379,6 +408,7 @@ function StatusChip({
           id={`${controlId}-menu`}
           role="dialog"
           aria-label={`Status editor for ${item.label}`}
+          onClick={(event) => event.stopPropagation()}
           className="fixed z-50 w-72 rounded-lg border border-neutral-200 bg-white p-3 text-left shadow-xl"
           style={{ top: menuPosition.top, left: menuPosition.left }}
         >
@@ -414,7 +444,7 @@ function StatusChip({
               if (event.key === 'Escape') setOpen(false);
             }}
             maxLength={5}
-            placeholder="DH"
+            placeholder="DP"
             aria-describedby={`${controlId}-error`}
             className="mt-1 h-9 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
           />
@@ -440,238 +470,169 @@ function StatusChip({
   );
 }
 
-function EditableText({
-  value,
-  field,
-  multiline = false,
-  className = '',
-  onSave,
+function MenuCell({
+  label,
+  entries,
 }: {
-  value: string;
-  field: 'label' | 'detail' | 'owner' | 'due';
-  multiline?: boolean;
-  className?: string;
-  onSave: (field: 'label' | 'detail' | 'owner' | 'due', value: string) => Promise<void>;
+  label: string;
+  entries: MenuEntry[];
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const primary = entries[0];
 
-  useEffect(() => setDraft(value), [value]);
-
-  async function save() {
-    if (draft.trim() === value) {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await onSave(field, draft.trim());
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (editing) {
-    const inputClass = 'w-full rounded-md border border-[#efb70c]/60 bg-white px-2 py-1 text-sm outline-none ring-2 ring-[#efb70c]/20';
-    return (
-      <div className="min-w-36">
-        {multiline ? (
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} className={`${inputClass} min-h-20 resize-y text-xs leading-5`} autoFocus />
-        ) : (
-          <input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') save();
-              if (event.key === 'Escape') setEditing(false);
-            }}
-            className={inputClass}
-            autoFocus
-          />
-        )}
-        <div className="mt-1 flex gap-1">
-          <button type="button" onClick={save} disabled={saving} className="rounded bg-black px-2 py-1 text-[11px] font-bold text-[#efb70c] disabled:opacity-60">
-            {saving ? 'Saving' : 'Save'}
-          </button>
-          <button type="button" onClick={() => setEditing(false)} className="rounded px-2 py-1 text-[11px] font-bold text-neutral-500 hover:bg-neutral-100">
-            Cancel
-          </button>
+  return (
+    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
+        className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-neutral-100"
+        aria-label={`${label} options`}
+      >
+        <span className="min-w-0">
+          <span className="block truncate font-semibold text-neutral-900">{primary?.label ?? 'None'}</span>
+          <span className="block truncate text-neutral-600">{primary?.value ?? 'No value found'}</span>
+        </span>
+        <span className="shrink-0 text-[10px] font-bold text-neutral-400">{entries.length > 1 ? `+${entries.length - 1}` : 'v'}</span>
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl">
+          <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{label}</div>
+          <div className="max-h-72 overflow-auto">
+            {entries.length ? entries.map((entry, index) => (
+              <div key={`${entry.label}-${entry.value}-${index}`} className="rounded-md px-2 py-1.5 text-xs hover:bg-neutral-50">
+                <div className="font-semibold text-neutral-950">{entry.label}</div>
+                <div className="mt-0.5 break-words text-neutral-700">{entry.value}</div>
+                <div className="mt-0.5 text-[10px] text-neutral-400">{entry.source}</div>
+              </div>
+            )) : (
+              <div className="px-2 py-3 text-xs text-neutral-500">No related values were found.</div>
+            )}
+          </div>
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => setEditing(true)}
-      className={`block w-full rounded-md text-left transition hover:bg-[#efb70c]/10 hover:outline hover:outline-1 hover:outline-[#efb70c]/30 ${className}`}
-      title="Click to edit"
-    >
-      {value || 'Click to add'}
-    </button>
-  );
-}
-
-function PrioritySelect({
-  value,
-  onSave,
-}: {
-  value: DashboardItem['priority'];
-  onSave: (field: 'priority', value: string) => Promise<void>;
-}) {
-  const [saving, setSaving] = useState(false);
-
-  async function save(nextValue: DashboardItem['priority']) {
-    if (nextValue === value) return;
-    setSaving(true);
-    try {
-      await onSave('priority', nextValue);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="mt-1 flex flex-wrap gap-1">
-      {(['critical', 'high', 'normal', 'done'] as const).map((option) => (
-        <button
-          key={option}
-          type="button"
-          disabled={saving}
-          onClick={() => save(option)}
-          className={`h-7 rounded-md px-2 text-[11px] font-bold capitalize transition disabled:opacity-60 ${
-            value === option ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-          }`}
-        >
-          {option}
-        </button>
-      ))}
+      ) : null}
     </div>
   );
 }
 
-function WorkItem({
-  item,
-  columns,
+function DetailDrawer({
+  record,
+  statusOverrides,
   auditEntries,
-  override,
+  onClose,
   onCommit,
-  onUpdate,
 }: {
-  item: DashboardItem;
-  columns: SheetColumn[];
+  record: CaseRecord | null;
+  statusOverrides: Record<string, StatusOverride>;
   auditEntries: AuditEntry[];
-  override?: StatusOverride;
+  onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
-  onUpdate: (itemId: string, field: 'label' | 'detail' | 'owner' | 'due' | 'priority', value: string) => Promise<void>;
 }) {
-  const saveField = (field: 'label' | 'detail' | 'owner' | 'due' | 'priority', value: string) => onUpdate(item.id, field, value);
-  const [expanded, setExpanded] = useState(false);
-  const fields = sourceEntries(item);
-  const colSpan = columns.length + 2;
+  if (!record) return null;
 
   return (
-    <>
-      <tr className="border-b border-neutral-200 align-top hover:bg-[#faf9f9]">
-        <td className={`sticky left-0 z-10 w-28 min-w-28 border-l-4 bg-white px-3 py-2 ${priorityClass(item.priority)}`}>
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            className="h-8 whitespace-nowrap rounded-md border border-neutral-200 px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-100"
-            aria-expanded={expanded}
-            title={expanded ? 'Hide sheet fields' : 'View all sheet fields'}
-          >
-            {expanded ? 'Hide' : 'Fields'}
-          </button>
-          <div className="mt-1 text-[11px] text-neutral-500">{sourceRowLabel(item)}</div>
-        </td>
-        {columns.map((column) => (
-          <td key={`${item.id}-${column.label}`} className={`max-w-80 px-3 py-2 text-sm leading-5 text-neutral-800 ${column.className ?? ''}`}>
-            <div className="line-clamp-3 whitespace-pre-wrap break-words">{valueForColumn(item, column) || '-'}</div>
-          </td>
-        ))}
-        <td className="px-3 py-2">
-          <StatusChip item={item} override={override} onCommit={onCommit} />
-        </td>
-      </tr>
-      {expanded ? (
-        <tr className="border-b border-neutral-200 bg-[#faf9f9]">
-          <td colSpan={colSpan} className="px-4 py-4">
-            <div className="grid gap-4">
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-bold text-neutral-950">All sheet fields</h3>
-                  <span className="text-xs text-neutral-500">{item.sourceRef ?? item.source}</span>
-                </div>
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {fields.length ? fields.map(([key, value]) => (
-                    <div key={key} className="rounded-md border border-neutral-200 bg-white p-2">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{displayKey(key)}</div>
-                      <div className="mt-1 whitespace-pre-wrap break-words text-sm text-neutral-900">{value}</div>
-                    </div>
-                  )) : (
-                    <div className="rounded-md border border-neutral-200 bg-white p-3 text-sm text-neutral-500">No source fields were stored for this row.</div>
-                  )}
-                </div>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-2">
-                <div className="rounded-md border border-neutral-200 bg-white p-3">
-                  <h3 className="text-sm font-bold text-neutral-950">GGFuneralOS fields</h3>
-                  <div className="mt-3 space-y-2">
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Display name</div>
-                      <EditableText value={item.label} field="label" onSave={saveField} className="mt-1 px-1 py-0.5 text-sm font-semibold text-neutral-950" />
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Dashboard detail</div>
-                      <EditableText value={item.detail} field="detail" multiline onSave={saveField} className="mt-1 px-1 py-0.5 text-xs leading-5 text-neutral-700" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Staff</div>
-                        <EditableText value={item.owner} field="owner" onSave={saveField} className="mt-1 px-1 py-0.5 text-sm text-neutral-700" />
-                      </div>
-                      <div>
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Date / time</div>
-                        <EditableText value={item.due} field="due" onSave={saveField} className="mt-1 px-1 py-0.5 text-sm text-neutral-700" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Priority</div>
-                      <PrioritySelect value={item.priority} onSave={saveField} />
-                    </div>
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/20" onClick={onClose}>
+      <aside
+        className="h-full w-full max-w-3xl overflow-auto border-l border-neutral-200 bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        aria-label={`Details for ${record.name}`}
+      >
+        <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white px-5 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">Family detail</div>
+              <h2 className="mt-1 truncate text-xl font-bold text-neutral-950">{record.name}</h2>
+              <div className="mt-1 text-xs text-neutral-500">{record.items.length} related source rows and files</div>
+            </div>
+            <button type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 p-5">
+          <section className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-neutral-200 p-3">
+              <h3 className="text-sm font-bold text-neutral-950">Date and time options</h3>
+              <div className="mt-2 divide-y divide-neutral-100">
+                {record.dateEntries.length ? record.dateEntries.map((entry, index) => (
+                  <div key={`${entry.label}-${index}`} className="py-2 text-sm">
+                    <div className="font-semibold text-neutral-900">{entry.label}</div>
+                    <div className="text-neutral-700">{entry.value}</div>
+                    <div className="text-xs text-neutral-400">{entry.source}</div>
                   </div>
-                </div>
-                <div className="rounded-md border border-neutral-200 bg-white p-3">
-                  <h3 className="text-sm font-bold text-neutral-950">Audit trail</h3>
-                  <div className="mt-2 space-y-2">
-                    {auditEntries.length ? auditEntries.slice(0, 6).map((entry) => (
-                      <div key={`${entry.changedAt}-${entry.fieldName ?? entry.to}`} className="text-xs leading-5 text-neutral-600">
-                        <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
-                        {' changed '}
-                        {entry.from ? <span>from {entry.from} </span> : null}
-                        {entry.to ? <span>to {entry.to} </span> : null}
-                        <span>on {formatStamp(entry.changedAt)}</span>
-                      </div>
-                    )) : (
-                      <div className="text-xs text-neutral-500">No staff changes recorded yet.</div>
-                    )}
-                  </div>
-                </div>
+                )) : <div className="py-3 text-sm text-neutral-500">No date or time values found.</div>}
               </div>
             </div>
-          </td>
-        </tr>
-      ) : null}
-    </>
+            <div className="rounded-lg border border-neutral-200 p-3">
+              <h3 className="text-sm font-bold text-neutral-950">Location options</h3>
+              <div className="mt-2 divide-y divide-neutral-100">
+                {record.locationEntries.length ? record.locationEntries.map((entry, index) => (
+                  <div key={`${entry.label}-${index}`} className="py-2 text-sm">
+                    <div className="font-semibold text-neutral-900">{entry.label}</div>
+                    <div className="break-words text-neutral-700">{entry.value}</div>
+                    <div className="text-xs text-neutral-400">{entry.source}</div>
+                  </div>
+                )) : <div className="py-3 text-sm text-neutral-500">No location values found.</div>}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-neutral-200">
+            <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Related work</div>
+            <div className="divide-y divide-neutral-100">
+              {record.items.map((item) => (
+                <div key={item.id} className="grid gap-3 p-3 md:grid-cols-[1fr_auto]">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] font-bold text-neutral-600">{item.source}</span>
+                      <span className="text-[11px] text-neutral-400">{sourceRowLabel(item)}</span>
+                    </div>
+                    <div className="mt-1 font-semibold text-neutral-950">{item.label}</div>
+                    <div className="mt-1 text-sm leading-5 text-neutral-600">{item.detail}</div>
+                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                      {collectTextEntries(item).slice(0, 10).map(([key, value]) => (
+                        <div key={`${item.id}-${key}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
+                          <span className="font-semibold text-neutral-500">{displayKey(key)}: </span>
+                          <span className="text-neutral-800">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="md:text-right">
+                    <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-neutral-200">
+            <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</div>
+            <div className="divide-y divide-neutral-100">
+              {auditEntries.filter((entry) => record.items.some((item) => item.id === entry.itemId)).slice(0, 12).map((entry) => (
+                <div key={`${entry.changedAt}-${entry.itemId}-${entry.fieldName ?? entry.to}`} className="px-3 py-2 text-xs text-neutral-600">
+                  <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
+                  {' changed '}
+                  {entry.from ? <span>from {entry.from} </span> : null}
+                  {entry.to ? <span>to {entry.to} </span> : null}
+                  <span>on {formatStamp(entry.changedAt)}</span>
+                  {entry.initials ? <span> by {entry.initials}</span> : null}
+                  {entry.staffName ? <span> by {entry.staffName}</span> : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
   );
 }
 
 export default function BoardPage() {
-  const [activeTab, setActiveTab] = useState('schedule');
+  const [activeView, setActiveView] = useState<ViewId>('today');
   const [search, setSearch] = useState('');
   const [items, setItems] = useState<DashboardItem[]>([]);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
@@ -680,10 +641,32 @@ export default function BoardPage() {
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
   const [sheetSyncMessage, setSheetSyncMessage] = useState('');
   const [sheetSyncing, setSheetSyncing] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
+    const syncView = () => {
+      const view = new URLSearchParams(window.location.search).get('view') as ViewId | null;
+      setActiveView(view && viewLabels[view] ? view : 'today');
+    };
+    syncView();
+    window.addEventListener('popstate', syncView);
+    window.addEventListener('ggfo-view-change', syncView);
     loadOperationsFeed();
+    return () => {
+      window.removeEventListener('popstate', syncView);
+      window.removeEventListener('ggfo-view-change', syncView);
+    };
   }, []);
+
+  function chooseView(view: ViewId) {
+    setActiveView(view);
+    const url = new URL(window.location.href);
+    if (view === 'today') url.searchParams.delete('view');
+    else url.searchParams.set('view', view);
+    window.history.replaceState({}, '', url);
+    window.dispatchEvent(new CustomEvent('ggfo-view-change'));
+  }
 
   function loadOperationsFeed() {
     return getOperationsFeed()
@@ -702,7 +685,7 @@ export default function BoardPage() {
         }));
         setAuditEntries((entries) => [...entries.filter((entry) => entry.kind === 'status'), ...itemAuditEntries]
           .sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt))
-          .slice(0, 50));
+          .slice(0, 100));
         setSyncState('connected');
       })
       .catch(() => {
@@ -710,20 +693,6 @@ export default function BoardPage() {
         setSources([]);
         setSyncState('unavailable');
       });
-  }
-
-  async function syncWeeklySheet() {
-    setSheetSyncing(true);
-    setSheetSyncMessage('');
-    try {
-      const response = await syncWeeklyServiceSchedule();
-      setSheetSyncMessage(`Imported ${response.data.imported} master sheet rows.`);
-      await loadOperationsFeed();
-    } catch (error: any) {
-      setSheetSyncMessage(error.message || 'Weekly Service Schedule sync failed.');
-    } finally {
-      setSheetSyncing(false);
-    }
   }
 
   useEffect(() => {
@@ -740,7 +709,6 @@ export default function BoardPage() {
           };
         }
 
-        const historyByItem = new Map<string, AuditEntry[]>();
         const nextAuditEntries = response.audit.map((entry) => ({
           kind: 'status' as const,
           itemId: entry.item_id,
@@ -751,26 +719,29 @@ export default function BoardPage() {
           changedAt: entry.created_at,
         }));
 
-        for (const entry of nextAuditEntries) {
-          const existing = historyByItem.get(entry.itemId) ?? [];
-          existing.push(entry);
-          historyByItem.set(entry.itemId, existing);
-        }
-
-        for (const [itemId, history] of historyByItem.entries()) {
-          if (nextOverrides[itemId]) nextOverrides[itemId].history = history;
-        }
-
         setStatusOverrides(nextOverrides);
         setAuditEntries((entries) => [...nextAuditEntries, ...entries.filter((entry) => entry.kind === 'edit')]
           .sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt))
-          .slice(0, 50));
-        setSyncState('connected');
+          .slice(0, 100));
       })
       .catch(() => {
         setStatusOverrides({});
       });
   }, [items]);
+
+  async function syncWeeklySheet() {
+    setSheetSyncing(true);
+    setSheetSyncMessage('');
+    try {
+      const response = await syncWeeklyServiceSchedule();
+      setSheetSyncMessage(`Imported ${response.data.imported} master sheet rows.`);
+      await loadOperationsFeed();
+    } catch (error: any) {
+      setSheetSyncMessage(error.message || 'Master sheet sync failed.');
+    } finally {
+      setSheetSyncing(false);
+    }
+  }
 
   async function commitStatus(item: DashboardItem, nextStatus: string, initials: string) {
     const saved = await saveOperationalStatus({
@@ -781,9 +752,7 @@ export default function BoardPage() {
       status: nextStatus,
       staff_initials: initials,
     });
-    if (!saved.audit && saved.changed) {
-      throw new Error('Status audit was not created');
-    }
+    if (!saved.audit && saved.changed) throw new Error('Status audit was not created');
 
     setStatusOverrides((current) => {
       const previous = current[item.id];
@@ -807,7 +776,8 @@ export default function BoardPage() {
             initials,
             changedAt: saved.data.updated_at,
           };
-      const next = {
+      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
+      return {
         ...current,
         [item.id]: {
           status: nextStatus,
@@ -816,176 +786,144 @@ export default function BoardPage() {
           history: saved.audit ? [entry, ...(previous?.history ?? [])] : previous?.history ?? [],
         },
       };
-      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 50));
-      return next;
     });
   }
 
-  async function updateItemField(itemId: string, field: 'label' | 'detail' | 'owner' | 'due' | 'priority', value: string) {
-    const previous = items;
-    setItems((current) => current.map((item) => (item.id === itemId ? { ...item, [field]: value } : item)));
-
-    try {
-      const response = await updateOperationItem(itemId, field, value);
-      setItems((current) => current.map((item) => (item.id === itemId ? { ...(response.data as DashboardItem) } : item)));
-      if (response.audit) {
-        const entry: AuditEntry = {
-          kind: 'edit',
-          itemId: response.audit.item_id,
-          label: response.audit.item_label,
-          from: response.audit.old_value,
-          to: response.audit.new_value,
-          staffName: response.audit.staff_name,
-          fieldName: response.audit.field_name,
-          changedAt: response.audit.created_at,
-        };
-        setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 50));
-      }
-    } catch {
-      setItems(previous);
-      throw new Error('Could not save item');
-    }
-  }
-
-  const visibleItems = useMemo(() => {
-    const tab = tabs.find((entry) => entry.id === activeTab) ?? tabs[0];
-    let filteredItems = items.filter((item) => itemMatchesTab(item, tab));
-
-    const normalizedSearch = search.trim().toLowerCase();
-    if (!normalizedSearch) return filteredItems;
-    return filteredItems.filter((item) =>
-      [item.label, item.detail, item.owner, item.due, item.source, item.status, ...Object.values(sourcePayload(item))]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedSearch),
-    );
-  }, [activeTab, items, search]);
-  const visibleColumns = useMemo(() => columnsForTab(activeTab, visibleItems), [activeTab, visibleItems]);
-  const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? 'Weekly Service Schedule';
-
-  function tabCount(tab: SheetTab) {
-    return items.filter((item) => itemMatchesTab(item, tab)).length;
-  }
+  const caseRecords = useMemo(() => buildCases(items, auditEntries), [items, auditEntries]);
+  const visibleRecords = useMemo(() => {
+    const normalized = search.trim().toLowerCase();
+    return caseRecords
+      .filter((record) => recordMatchesView(record, activeView))
+      .filter((record) => !normalized || record.searchText.includes(normalized))
+      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
+  }, [activeView, caseRecords, search]);
+  const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
+  const hasSourceIssue = sources.some((source) => source.status === 'unavailable');
 
   return (
-    <div className="min-h-screen bg-[#faf9f9] text-neutral-950">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="px-6 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#a77d00]">KC Golden Gate Operations</p>
-              <h1 className="mt-1 text-2xl font-bold tracking-normal text-black">{activeTabLabel}</h1>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-[#faf9f9] px-3 py-2 text-xs text-neutral-600">
-              <span className={`h-2 w-2 rounded-full ${syncState === 'connected' ? 'bg-emerald-600' : syncState === 'loading' ? 'bg-amber-500' : 'bg-neutral-400'}`} />
-              {syncState === 'connected' ? 'Database connected' : syncState === 'loading' ? 'Checking database' : 'Database unavailable'}
-            </div>
+    <div className="h-full bg-[#faf9f9] text-neutral-950">
+      <header className="sticky top-0 z-20 border-b border-neutral-200 bg-white">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">KC Golden Gate Operations</div>
+            <h1 className="truncate text-xl font-bold text-black">{viewLabels[activeView]}</h1>
           </div>
-          {sources.length ? (
-            <div className="mt-4 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1">
+            {(Object.keys(viewLabels) as ViewId[]).map((view) => (
+              <button
+                key={view}
+                type="button"
+                onClick={() => chooseView(view)}
+                className={`h-8 rounded-md px-2.5 text-xs font-bold transition ${
+                  activeView === view ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                {viewLabels[view]}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex min-w-[280px] flex-1 items-center justify-end gap-2">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search family or deceased"
+              className="h-9 w-full max-w-sm rounded-md border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+              aria-label="Search family or deceased"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSources((value) => !value)}
+              title="Source diagnostics"
+              className={`h-9 rounded-md border px-3 text-xs font-bold ${hasSourceIssue ? 'border-red-300 bg-red-50 text-red-800' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}
+            >
+              Sources
+            </button>
+          </div>
+        </div>
+        {showSources ? (
+          <div className="border-t border-neutral-100 bg-neutral-50 px-4 py-2">
+            <div className="flex flex-wrap items-center gap-2">
               {sources.map((source) => (
-                <div
-                  key={source.id}
-                  title={source.detail}
-                  className={`rounded-md border px-3 py-2 text-xs ${
-                    source.status === 'connected'
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                      : source.status === 'not_configured'
-                        ? 'border-amber-200 bg-amber-50 text-amber-900'
-                        : 'border-red-200 bg-red-50 text-red-800'
-                  }`}
-                >
-                  <div className="font-bold">{source.label}</div>
-                  <div className="mt-0.5 max-w-96 truncate">{source.detail}</div>
+                <div key={source.id} className="rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-700">
+                  <span className="font-bold">{source.label}: </span>
+                  <span>{source.status}</span>
                 </div>
               ))}
+              <button
+                type="button"
+                onClick={syncWeeklySheet}
+                disabled={sheetSyncing}
+                className="h-8 rounded-md bg-black px-3 text-xs font-bold text-[#efb70c] disabled:opacity-60"
+              >
+                {sheetSyncing ? 'Syncing' : 'Sync master sheet'}
+              </button>
+              {sheetSyncMessage ? <span className="text-xs text-neutral-500">{sheetSyncMessage}</span> : null}
             </div>
-          ) : null}
-        </div>
-
-        <div className="scrollbar-thin flex gap-1 overflow-x-auto border-t border-neutral-100 px-6 py-2">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold transition ${
-                activeTab === tab.id ? 'bg-black text-[#efb70c]' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950'
-              }`}
-            >
-              <span>{tab.label}</span>
-              <span className={`rounded px-1.5 py-0.5 text-[11px] ${activeTab === tab.id ? 'bg-white/10 text-[#efb70c]' : 'bg-neutral-100 text-neutral-500'}`}>
-                {tabCount(tab)}
-              </span>
-            </button>
-          ))}
-        </div>
+          </div>
+        ) : null}
       </header>
 
-      <main className="p-6">
-        <section>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3">
-              <div>
-                <h2 className="text-base font-bold">{activeTabLabel}</h2>
-                <p className="mt-0.5 text-xs text-neutral-500">Rows are imported from the master Google Sheet. Sheet fields are read-only; staff statuses and dashboard edits are saved in GGFuneralOS.</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={syncWeeklySheet}
-                  disabled={sheetSyncing}
-                  className="h-9 rounded-md bg-black px-3 text-xs font-bold text-[#efb70c] hover:bg-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {sheetSyncing ? 'Syncing...' : 'Sync master sheet'}
-                </button>
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search rows"
-                  className="h-9 w-56 rounded-md border border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
-                  aria-label="Search rows"
-                />
-              </div>
-            </div>
-            {sheetSyncMessage ? <div className="border-b border-neutral-200 bg-[#faf9f9] px-4 py-2 text-xs text-neutral-600">{sheetSyncMessage}</div> : null}
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] border-collapse text-left">
-                <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
-                  <tr>
-                    <th className="sticky left-0 z-20 w-28 min-w-28 bg-neutral-50 px-3 py-2 font-semibold">Source Row</th>
-                    {visibleColumns.map((column) => (
-                      <th key={column.label} className={`px-3 py-2 font-semibold ${column.className ?? ''}`}>{column.label}</th>
+      <main className="p-3">
+        <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+          <div className="grid grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:hidden">
+            <div className="px-2 py-2">Deceased</div>
+            <div className="px-2 py-2">Date / Time</div>
+            <div className="px-2 py-2">Location</div>
+            <div className="px-2 py-2">Owner</div>
+            <div className="px-2 py-2">Status</div>
+            <div className="px-2 py-2">Next Action</div>
+            <div className="px-2 py-2">Blocker</div>
+            <div className="px-2 py-2">Updated</div>
+          </div>
+
+          <div className="divide-y divide-neutral-100">
+            {visibleRecords.length ? visibleRecords.map((record) => (
+              <button
+                key={record.key}
+                type="button"
+                onClick={() => setSelectedKey(record.key)}
+                className="grid w-full grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:block"
+              >
+                <div className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5">
+                  <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {readinessBadges(record).filter((badge) => badge.active).map((badge) => (
+                      <span key={badge.label} className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${badge.tone}`}>{badge.label}</span>
                     ))}
-                    <th className="px-3 py-2 font-semibold">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleItems.length ? (
-                    visibleItems.map((item) => (
-                      <WorkItem
-                        key={item.id}
-                        item={item}
-                        columns={visibleColumns}
-                        auditEntries={auditEntries.filter((entry) => entry.itemId === item.id)}
-                        override={statusOverrides[item.id]}
-                        onCommit={commitStatus}
-                        onUpdate={updateItemField}
-                      />
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-sm text-neutral-500">
-                        No rows found for this master sheet view.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </div>
+                </div>
+                <div className="px-1 py-1.5"><MenuCell label="Date and time options" entries={record.dateEntries} /></div>
+                <div className="px-1 py-1.5"><MenuCell label="Location options" entries={record.locationEntries} /></div>
+                <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
+                <div className="px-2 py-2">
+                  <StatusChip item={record.statusItem} override={statusOverrides[record.statusItem.id]} onCommit={commitStatus} />
+                </div>
+                <div className="line-clamp-2 px-2 py-2 text-xs leading-5 text-neutral-700">{record.nextAction}</div>
+                <div className={`px-2 py-2 text-xs font-semibold ${record.blocker === 'None' ? 'text-neutral-400' : 'text-red-700'}`}>{record.blocker}</div>
+                <div className="px-2 py-2 text-xs text-neutral-500 max-xl:hidden">{record.updatedAt}</div>
+              </button>
+            )) : (
+              <div className="px-4 py-12 text-center text-sm text-neutral-500">
+                No families matched this view.
+              </div>
+            )}
           </div>
         </section>
       </main>
+
+      <DetailDrawer
+        record={selectedRecord}
+        statusOverrides={statusOverrides}
+        auditEntries={auditEntries}
+        onClose={() => setSelectedKey(null)}
+        onCommit={commitStatus}
+      />
+
+      {syncState === 'unavailable' ? (
+        <div className="fixed bottom-4 right-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800 shadow">
+          Dashboard database unavailable
+        </div>
+      ) : null}
     </div>
   );
 }
