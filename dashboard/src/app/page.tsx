@@ -288,7 +288,9 @@ function isTimeOnlyLabel(value: string) {
 
 function isPseudoCaseItem(item: DashboardItem) {
   const payload = sourcePayload(item);
+  const normalizedLabel = normalizeKey(item.label);
   if (item.source === 'Arrangements' && isTimeOnlyLabel(item.label)) return true;
+  if (item.source === 'Arrangements' && ['time', 'date', 'day', 'block', 'lunch'].includes(normalizedLabel)) return true;
   if (item.source === 'Arrangements' && cleanDisplay(payload.case_match_basis) !== 'arrangement calendar cell' && isTimeOnlyLabel(itemName(item))) return true;
   return false;
 }

@@ -319,7 +319,7 @@ function cleanArrangementCell(value: string) {
   if (!trimmed) return '';
   const withoutBlockPrefix = trimmed.replace(/^block\s*:?\s*/i, '').trim();
   const normalized = withoutBlockPrefix.toLowerCase();
-  if (!withoutBlockPrefix || normalized === 'block' || normalized === 'lunch') return '';
+  if (!withoutBlockPrefix || ['block', 'lunch', 'time', 'date', 'day'].includes(normalized)) return '';
   if (isTimeLike(withoutBlockPrefix)) return '';
   return withoutBlockPrefix;
 }
