@@ -2,114 +2,87 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { setAuth } from '@/lib/auth';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<'password' | 'pin'>('password');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async () => {
+  async function handleLogin() {
     setError('');
     setLoading(true);
     try {
-      const body = mode === 'pin' ? { pin } : { email, password };
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ username, pin }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
 
-      setAuth(data.token, data.staff);
-      router.push('/');
+      const next = new URLSearchParams(window.location.search).get('next') || '/';
+      router.replace(next);
+      router.refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-brand-dark flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-brand-dark">GGFuneralOS</h1>
-          <p className="text-xs text-gray-400 mt-1">KC Golden Gate Funeral Home</p>
-        </div>
-
-        {/* Mode toggle */}
-        <div className="flex bg-gray-100 rounded-lg p-1 mb-6">
-          <button
-            onClick={() => setMode('password')}
-            className={`flex-1 text-xs py-2 rounded-md transition-colors ${mode === 'password' ? 'bg-white shadow text-brand-dark font-medium' : 'text-gray-500'}`}
-          >
-            Email & Password
-          </button>
-          <button
-            onClick={() => setMode('pin')}
-            className={`flex-1 text-xs py-2 rounded-md transition-colors ${mode === 'pin' ? 'bg-white shadow text-brand-dark font-medium' : 'text-gray-500'}`}
-          >
-            Quick PIN
-          </button>
-        </div>
-
-        {mode === 'password' ? (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-[10px] text-gray-400 uppercase tracking-wide mb-1">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-gold"
-                placeholder="you@kcgoldengate.com"
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] text-gray-400 uppercase tracking-wide mb-1">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-gold"
-                placeholder="Enter password"
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              />
-            </div>
+    <div className="flex min-h-screen items-center justify-center bg-black px-4">
+      <div className="w-full max-w-sm rounded-lg border border-white/10 bg-white p-6 shadow-2xl">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center rounded-md border border-neutral-200 bg-white p-1.5">
+            <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
           </div>
-        ) : (
           <div>
-            <label className="block text-[10px] text-gray-400 uppercase tracking-wide mb-1">Staff PIN</label>
+            <h1 className="text-lg font-bold text-black">Golden Gate</h1>
+            <p className="text-xs text-neutral-500">Staff dashboard</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Username</span>
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value.toLowerCase())}
+              onKeyDown={(event) => event.key === 'Enter' && handleLogin()}
+              className="mt-1 h-11 w-full rounded-md border border-neutral-300 px-3 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+              placeholder="dimond"
+              autoComplete="username"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">6-digit PIN</span>
             <input
               type="password"
               value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-2xl text-center tracking-[0.5em] focus:outline-none focus:border-gold"
-              placeholder="••••"
-              maxLength={6}
+              onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={(event) => event.key === 'Enter' && handleLogin()}
+              className="mt-1 h-12 w-full rounded-md border border-neutral-300 px-3 text-center text-2xl tracking-[0.4em] outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
               inputMode="numeric"
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+              maxLength={6}
+              autoComplete="one-time-code"
             />
-          </div>
-        )}
+          </label>
+        </div>
 
-        {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
+        {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
 
         <button
+          type="button"
           onClick={handleLogin}
           disabled={loading}
-          className="w-full mt-6 bg-gold text-white py-2.5 rounded-lg font-medium text-sm hover:bg-gold-dark transition-colors disabled:opacity-50"
+          className="mt-6 h-11 w-full rounded-md bg-[#efb70c] text-sm font-bold text-black hover:bg-[#d2a006] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {loading ? 'Signing in...' : 'Sign In'}
+          {loading ? 'Signing in...' : 'Sign in'}
         </button>
       </div>
     </div>

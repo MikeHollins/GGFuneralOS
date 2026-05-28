@@ -5,8 +5,8 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        brand: { dark: '#1a1a2e', DEFAULT: '#16213e', light: '#0f3460' },
-        gold: { DEFAULT: '#c9a96e', light: '#dfc59b', dark: '#a88a4e' },
+        brand: { dark: '#000000', DEFAULT: '#111111', light: '#2b2b2b' },
+        gold: { DEFAULT: '#efb70c', light: '#ffc000', dark: '#d2a006' },
       },
     },
   },

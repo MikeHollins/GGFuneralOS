@@ -1,0 +1,120 @@
+import { NextResponse } from 'next/server';
+import { isAuthError, requireStaff } from '@/lib/authz';
+import { getSql } from '@/lib/db';
+
+const editableFields = new Set(['label', 'detail', 'owner', 'due', 'priority']);
+const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'priority']);
+
+function cleanValue(field: string, value: unknown) {
+  const text = String(value ?? '').trim();
+  if (field === 'priority' && !['critical', 'high', 'normal', 'done'].includes(text)) {
+    throw new Error('Invalid priority');
+  }
+  if (field === 'label' && !text) throw new Error('Label is required');
+  return text;
+}
+
+function columnForField(field: string) {
+  if (field === 'due') return 'due_text';
+  return field;
+}
+
+function displayStaffName(session: { first_name: string; last_name: string; username?: string | null }) {
+  const fullName = `${session.first_name} ${session.last_name}`.trim();
+  return fullName || session.username || 'Staff';
+}
+
+function toDashboardItem(row: any) {
+  return {
+    id: row.item_id,
+    area: row.area,
+    label: row.label,
+    detail: row.detail,
+    owner: row.owner,
+    due: row.due_text,
+    source: row.source,
+    sourceRef: row.source_ref,
+    sourcePayload: row.source_payload ?? {},
+    status: row.status_default,
+    priority: row.priority,
+    options: Array.isArray(row.options) ? row.options : [],
+  };
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ itemId: string }> },
+) {
+  const session = await requireStaff();
+  if (isAuthError(session)) return session;
+
+  try {
+    const { itemId } = await context.params;
+    const body = await request.json();
+    const field = String(body.field || '').trim();
+    if (!editableFields.has(field)) return NextResponse.json({ error: 'Field is not editable' }, { status: 400 });
+
+    const value = cleanValue(field, body.value);
+    const sql = getSql();
+    const column = columnForField(field);
+    if (!selectableColumns.has(column)) return NextResponse.json({ error: 'Field is not editable' }, { status: 400 });
+
+    const currentRows = await sql(
+      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options
+       FROM operational_items
+       WHERE item_id = $1 AND is_archived = false`,
+      [itemId],
+    );
+    const current = currentRows[0] as any;
+    if (!current) return NextResponse.json({ error: 'Item not found' }, { status: 404 });
+
+    const oldValue = String(current[column] ?? '');
+    if (oldValue === value) {
+      return NextResponse.json({
+        data: toDashboardItem(current),
+        audit: null,
+        changed: false,
+      });
+    }
+
+    const rows = await sql(
+      `UPDATE operational_items
+       SET ${column} = $1,
+           edited_fields = edited_fields || jsonb_build_object($3::text, true),
+           updated_at = now()
+       WHERE item_id = $2 AND is_archived = false
+       RETURNING item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options`,
+      [value, itemId, field],
+    );
+
+    if (!rows[0]) return NextResponse.json({ error: 'Item not found' }, { status: 404 });
+
+    const updated = rows[0] as any;
+    const auditRows = await sql(
+      `INSERT INTO operational_item_audit
+         (item_id, item_label, area, source, field_name, old_value, new_value, staff_id, staff_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        updated.item_id,
+        updated.label,
+        updated.area,
+        updated.source,
+        field,
+        oldValue,
+        value,
+        session.staff_id,
+        displayStaffName(session),
+      ],
+    );
+
+    return NextResponse.json({
+      data: toDashboardItem(updated),
+      audit: auditRows[0] ?? null,
+      changed: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not update item';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

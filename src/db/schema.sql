@@ -65,6 +65,7 @@ CREATE TABLE staff (
   first_name    TEXT NOT NULL,
   last_name     TEXT NOT NULL,
   role          TEXT NOT NULL DEFAULT 'staff',  -- director, staff, admin, owner
+  username      TEXT,
   email         TEXT,
   phone         TEXT,
   pin_hash      TEXT,  -- simple auth for dashboard
@@ -72,6 +73,8 @@ CREATE TABLE staff (
   created_at    TIMESTAMPTZ DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE UNIQUE INDEX idx_staff_username_unique ON staff (lower(username)) WHERE username IS NOT NULL;
 
 -- ─── Cases (central table) ──────────────────────────────────────────────────
 
@@ -241,6 +244,27 @@ CREATE TABLE case_contacts (
 
 CREATE INDEX idx_contacts_case ON case_contacts(case_id);
 
+-- ─── Staff Invites ──────────────────────────────────────────────────────────
+
+CREATE TABLE staff_invites (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash     TEXT NOT NULL UNIQUE,
+  first_name     TEXT NOT NULL,
+  last_name      TEXT NOT NULL,
+  contact_email  TEXT,
+  contact_phone  TEXT,
+  role           TEXT NOT NULL DEFAULT 'staff',
+  status         TEXT NOT NULL DEFAULT 'pending',
+  created_by     UUID REFERENCES staff(id),
+  claimed_by     UUID REFERENCES staff(id),
+  expires_at     TIMESTAMPTZ NOT NULL,
+  claimed_at     TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_staff_invites_status ON staff_invites(status, expires_at);
+CREATE INDEX idx_staff_invites_created_by ON staff_invites(created_by, created_at DESC);
+
 -- ─── Case Tasks (auto-generated per phase) ──────────────────────────────────
 
 CREATE TABLE case_tasks (
@@ -262,6 +286,100 @@ CREATE TABLE case_tasks (
 CREATE INDEX idx_tasks_case ON case_tasks(case_id);
 CREATE INDEX idx_tasks_status ON case_tasks(status);
 CREATE INDEX idx_tasks_deadline ON case_tasks(deadline);
+
+-- ─── Operational Status / Audit Trail ──────────────────────────────────────
+
+CREATE TABLE operational_statuses (
+  item_id        TEXT PRIMARY KEY,
+  item_label     TEXT NOT NULL,
+  area           TEXT,
+  source         TEXT,
+  status         TEXT NOT NULL,
+  staff_initials TEXT NOT NULL,
+  updated_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE operational_status_audit (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id        TEXT NOT NULL,
+  item_label     TEXT NOT NULL,
+  area           TEXT,
+  source         TEXT,
+  old_status     TEXT,
+  new_status     TEXT NOT NULL,
+  staff_initials TEXT NOT NULL,
+  note           TEXT,
+  created_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_operational_audit_item ON operational_status_audit(item_id, created_at DESC);
+CREATE INDEX idx_operational_audit_created ON operational_status_audit(created_at DESC);
+
+CREATE TABLE operational_items (
+  item_id        TEXT PRIMARY KEY,
+  area           TEXT NOT NULL,
+  label          TEXT NOT NULL,
+  detail         TEXT NOT NULL DEFAULT '',
+  owner          TEXT NOT NULL DEFAULT '',
+  due_text       TEXT NOT NULL DEFAULT '',
+  source         TEXT NOT NULL DEFAULT '',
+  status_default TEXT NOT NULL DEFAULT '',
+  priority       TEXT NOT NULL DEFAULT 'normal',
+  options        JSONB NOT NULL DEFAULT '[]',
+  source_origin  TEXT NOT NULL DEFAULT 'ggfuneralos',
+  source_ref     TEXT,
+  source_payload JSONB NOT NULL DEFAULT '{}',
+  source_seen_at TIMESTAMPTZ,
+  source_content_hash TEXT,
+  edited_fields  JSONB NOT NULL DEFAULT '{}',
+  is_archived    BOOLEAN NOT NULL DEFAULT false,
+  created_at     TIMESTAMPTZ DEFAULT now(),
+  updated_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_operational_items_area ON operational_items(area, is_archived);
+CREATE INDEX idx_operational_items_source_origin ON operational_items(source_origin, is_archived);
+CREATE INDEX idx_operational_items_source_ref ON operational_items(source_origin, source_ref) WHERE is_archived = false;
+
+CREATE TABLE operational_item_audit (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id        TEXT NOT NULL,
+  item_label     TEXT NOT NULL,
+  area           TEXT,
+  source         TEXT,
+  field_name     TEXT NOT NULL,
+  old_value      TEXT,
+  new_value      TEXT,
+  staff_id       UUID REFERENCES staff(id),
+  staff_name     TEXT NOT NULL,
+  created_at     TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_operational_item_audit_item ON operational_item_audit(item_id, created_at DESC);
+CREATE INDEX idx_operational_item_audit_created ON operational_item_audit(created_at DESC);
+
+CREATE TABLE source_file_items (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_origin  TEXT NOT NULL DEFAULT 'smb',
+  source_root    TEXT NOT NULL,
+  relative_path  TEXT NOT NULL,
+  parent_path    TEXT NOT NULL DEFAULT '',
+  name           TEXT NOT NULL,
+  item_type      TEXT NOT NULL CHECK (item_type IN ('directory', 'file', 'other')),
+  extension      TEXT,
+  size_bytes     BIGINT,
+  modified_at    TIMESTAMPTZ,
+  metadata       JSONB NOT NULL DEFAULT '{}',
+  seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_archived    BOOLEAN NOT NULL DEFAULT false,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source_origin, source_root, relative_path)
+);
+
+CREATE INDEX idx_source_file_items_parent ON source_file_items(source_origin, source_root, parent_path, is_archived);
+CREATE INDEX idx_source_file_items_type ON source_file_items(source_origin, item_type, is_archived);
+CREATE INDEX idx_source_file_items_seen ON source_file_items(source_origin, seen_at DESC);
 
 -- ─── Case Documents ─────────────────────────────────────────────────────────
 

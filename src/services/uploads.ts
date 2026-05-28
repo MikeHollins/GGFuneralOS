@@ -2,8 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { query } from '../db/client';
-
-const UPLOAD_ROOT = path.join(process.cwd(), 'data', 'uploads');
+import { resolveStoragePath } from './storage-root';
 
 const FILE_LIMITS: Record<string, number> = {
   photo: 10 * 1024 * 1024,       // 10MB
@@ -21,7 +20,7 @@ const MIME_TO_TYPE: Record<string, string> = {
 };
 
 export function getCaseUploadDir(caseId: string): string {
-  const dir = path.join(UPLOAD_ROOT, caseId);
+  const dir = resolveStoragePath(caseId);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -56,7 +55,7 @@ export async function saveUploadedFile(
   );
 
   const fileId = (rows[0] as any).id;
-  console.log(`[uploads] Saved ${fileType}: ${originalName} (${buffer.length} bytes) → ${storagePath}`);
+  console.log(`[uploads] Saved ${fileType} file ${fileId} (${buffer.length} bytes)`);
   return { fileId, storagePath };
 }
 

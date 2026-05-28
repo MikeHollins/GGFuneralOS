@@ -3,6 +3,16 @@ import { query, queryOne } from '../../db/client';
 
 export const dashboardRouter = Router();
 
+function normalizeItemIds(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(normalizeItemIds);
+  if (typeof value !== 'string') return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 200);
+}
+
 // ─── Active Cases Board (Kanban data) ────────────────────────────────────────
 
 dashboardRouter.get('/board', async (_req: Request, res: Response) => {
@@ -50,6 +60,95 @@ dashboardRouter.get('/board', async (_req: Request, res: Response) => {
     }
 
     res.json({ board });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Operational status chips and audit trail ───────────────────────────────
+
+dashboardRouter.get('/operational-status', async (req: Request, res: Response) => {
+  try {
+    const itemIds = normalizeItemIds(req.query.item_ids);
+    const params: any[] = [];
+    let statusSql = 'SELECT * FROM operational_statuses';
+
+    if (itemIds.length) {
+      statusSql += ' WHERE item_id = ANY($1)';
+      params.push(itemIds);
+    }
+
+    statusSql += ' ORDER BY updated_at DESC';
+
+    const statuses = await query(statusSql, params);
+    const audit = await query(
+      `SELECT *
+       FROM operational_status_audit
+       ${itemIds.length ? 'WHERE item_id = ANY($1)' : ''}
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      itemIds.length ? [itemIds] : []
+    );
+
+    res.json({ data: statuses, audit });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+dashboardRouter.post('/operational-status', async (req: Request, res: Response) => {
+  try {
+    const itemId = String(req.body.item_id || '').trim();
+    const itemLabel = String(req.body.item_label || '').trim();
+    const status = String(req.body.status || '').trim();
+    const staffInitials = String(req.body.staff_initials || '').trim().toUpperCase();
+    const area = req.body.area ? String(req.body.area).trim() : null;
+    const source = req.body.source ? String(req.body.source).trim() : null;
+    const note = req.body.note ? String(req.body.note).trim() : null;
+
+    if (!itemId) return res.status(400).json({ error: 'item_id is required' });
+    if (!itemLabel) return res.status(400).json({ error: 'item_label is required' });
+    if (!status) return res.status(400).json({ error: 'status is required' });
+    if (!staffInitials) return res.status(400).json({ error: 'staff_initials is required' });
+    if (staffInitials.length > 5) return res.status(400).json({ error: 'staff_initials must be 5 characters or fewer' });
+
+    const previous = await queryOne<{ status: string }>(
+      'SELECT status FROM operational_statuses WHERE item_id = $1',
+      [itemId]
+    );
+
+    if (previous?.status === status) {
+      const current = await queryOne(
+        'SELECT * FROM operational_statuses WHERE item_id = $1',
+        [itemId]
+      );
+      return res.json({ data: current, audit: null, changed: false });
+    }
+
+    const current = await queryOne(
+      `INSERT INTO operational_statuses
+         (item_id, item_label, area, source, status, staff_initials, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (item_id) DO UPDATE SET
+         item_label = EXCLUDED.item_label,
+         area = EXCLUDED.area,
+         source = EXCLUDED.source,
+         status = EXCLUDED.status,
+         staff_initials = EXCLUDED.staff_initials,
+         updated_at = now()
+       RETURNING *`,
+      [itemId, itemLabel, area, source, status, staffInitials]
+    );
+
+    const audit = await queryOne(
+      `INSERT INTO operational_status_audit
+         (item_id, item_label, area, source, old_status, new_status, staff_initials, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [itemId, itemLabel, area, source, previous?.status ?? null, status, staffInitials, note]
+    );
+
+    res.status(201).json({ data: current, audit, changed: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

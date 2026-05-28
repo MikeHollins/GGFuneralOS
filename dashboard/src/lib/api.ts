@@ -40,6 +40,40 @@ export const getMetrics = () =>
 export const getCalendar = (start?: string, end?: string) =>
   apiFetch<{ data: Case[] }>(`/dashboard/calendar${start ? `?start=${start}&end=${end}` : ''}`);
 
+export const getOperationalStatuses = (itemIds?: string[]) =>
+  apiFetch<{ data: OperationalStatus[]; audit: OperationalStatusAudit[] }>(
+    itemIds?.length ? `/dashboard/operational-status?item_ids=${encodeURIComponent(itemIds.join(','))}` : '/dashboard/operational-status'
+  );
+
+export const getOperationsFeed = () =>
+  apiFetch<OperationsFeed>('/dashboard/operations');
+
+export const updateOperationItem = (itemId: string, field: string, value: string) =>
+  apiFetch<{ data: OperationsFeed['items'][number]; audit: OperationalItemAudit | null; changed: boolean }>(
+    `/dashboard/operations/${encodeURIComponent(itemId)}`,
+    { method: 'PATCH', body: JSON.stringify({ field, value }) }
+  );
+
+export const syncWeeklyServiceSchedule = () =>
+  apiFetch<{ data: { imported: number; source: string } }>(
+    '/dashboard/sync/weekly-service',
+    { method: 'POST', body: '{}' }
+  );
+
+export const saveOperationalStatus = (data: {
+  item_id: string;
+  item_label: string;
+  area?: string;
+  source?: string;
+  status: string;
+  staff_initials: string;
+  note?: string;
+}) =>
+  apiFetch<{ data: OperationalStatus; audit: OperationalStatusAudit | null; changed: boolean }>(
+    '/dashboard/operational-status',
+    { method: 'POST', body: JSON.stringify(data) }
+  );
+
 // ─── Tasks ──────────────────────────────────────────────────────────────────
 
 export const getCaseTasks = (caseId: string, phase?: string) =>
@@ -152,4 +186,67 @@ export interface DashboardMetrics {
   overdue_tasks: number;
   pending_payments: number;
   pending_death_certs: number;
+}
+
+export interface OperationalStatus {
+  item_id: string;
+  item_label: string;
+  area: string | null;
+  source: string | null;
+  status: string;
+  staff_initials: string;
+  updated_at: string;
+}
+
+export interface OperationalStatusAudit {
+  id: string;
+  item_id: string;
+  item_label: string;
+  area: string | null;
+  source: string | null;
+  old_status: string | null;
+  new_status: string;
+  staff_initials: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface OperationsFeed {
+  items: Array<{
+    id: string;
+    area: string;
+    label: string;
+    detail: string;
+    owner: string;
+    due: string;
+    source: string;
+    sourceRef?: string | null;
+    sourcePayload?: Record<string, string>;
+    status: string;
+    priority: 'critical' | 'high' | 'normal' | 'done';
+    options: string[];
+  }>;
+  item_audit: OperationalItemAudit[];
+  sources: Array<{
+    id: string;
+    label: string;
+    status: 'connected' | 'not_configured' | 'unavailable';
+    mode: 'read_only';
+    detail: string;
+    checked_at: string;
+  }>;
+}
+
+export interface OperationalItemAudit {
+  id: string;
+  item_id: string;
+  item_label: string;
+  area: string | null;
+  source: string | null;
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
+  staff_id: string | null;
+  staff_name: string;
+  created_at: string;
 }

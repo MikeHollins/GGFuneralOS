@@ -15,6 +15,7 @@ import { paymentsRouter } from './api/routes/payments';
 import { docusignRouter } from './api/routes/docusign';
 import { publicProgramRouter } from './api/routes/public-program';
 import { smsWebhookRouter } from './api/routes/sms-webhook';
+import { requireJWT } from './api/middleware/jwt-auth';
 
 // ─── Services ───────────────────────────────────────────────────────────────
 import { startCronJobs } from './services/cron';
@@ -44,15 +45,14 @@ app.use('/api/payments/webhook', paymentsRouter); // Stripe webhook
 app.use('/api/docusign/webhook', docusignRouter); // DocuSign Connect webhook
 
 // ─── Protected Routes ─────────────────────────────────────────────────��─────
-// Auth middleware is applied per-route in each router (requireJWT or API_SECRET)
-app.use('/api/cases', casesRouter);
-app.use('/api/contacts', contactsRouter);
-app.use('/api/tasks', tasksRouter);
-app.use('/api/dashboard', dashboardRouter);
-app.use('/api/max', maxBridgeRouter);
-app.use('/api/documents', documentsRouter);
-app.use('/api/payments', paymentsRouter);
-app.use('/api/docusign', docusignRouter);
+app.use('/api/cases', requireJWT, casesRouter);
+app.use('/api/contacts', requireJWT, contactsRouter);
+app.use('/api/tasks', requireJWT, tasksRouter);
+app.use('/api/dashboard', requireJWT, dashboardRouter);
+app.use('/api/max', requireJWT, maxBridgeRouter);
+app.use('/api/documents', requireJWT, documentsRouter);
+app.use('/api/payments', requireJWT, paymentsRouter);
+app.use('/api/docusign', requireJWT, docusignRouter);
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
