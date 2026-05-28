@@ -19,6 +19,12 @@ type SourceFileRow = {
   metadata: Record<string, string | number | boolean>;
 };
 
+type ScanStats = {
+  failedDirs: string[];
+  failedItems: string[];
+  capped: boolean;
+};
+
 const ignoredNames = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '$RECYCLE.BIN', 'System Volume Information']);
 const defaultIncludedTopLevels = [
   '_PDF Programs',
@@ -139,30 +145,39 @@ async function assertReadOnlyMount(root: string) {
   }
 }
 
-async function scanDirectory(root: string, relativeDir: string, depth: number, maxDepth: number, rows: SourceFileRow[], maxItems: number) {
-  if (rows.length >= maxItems || depth > maxDepth) return;
+async function scanDirectory(root: string, relativeDir: string, depth: number, maxDepth: number, rows: SourceFileRow[], maxItems: number, scanStats: ScanStats) {
+  if (rows.length >= maxItems) {
+    scanStats.capped = true;
+    return;
+  }
+  if (depth > maxDepth) return;
 
   const absoluteDir = path.join(root, relativeDir);
   let entries: Dirent[];
   try {
     entries = await readdir(absoluteDir, { withFileTypes: true });
   } catch {
+    scanStats.failedDirs.push(relativeDir);
     return;
   }
 
   for (const entry of entries) {
-    if (rows.length >= maxItems) return;
+    if (rows.length >= maxItems) {
+      scanStats.capped = true;
+      return;
+    }
     if (ignoredNames.has(entry.name)) continue;
 
     const relativePath = toPosixPath(path.join(relativeDir, entry.name));
     const absolutePath = path.join(root, relativePath);
-    let stats;
+    let fileStats;
     try {
-      stats = await lstat(absolutePath);
+      fileStats = await lstat(absolutePath);
     } catch {
+      scanStats.failedItems.push(relativePath);
       continue;
     }
-    const itemType = stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other';
+    const itemType = fileStats.isDirectory() ? 'directory' : fileStats.isFile() ? 'file' : 'other';
 
     rows.push({
       source_origin: 'smb',
@@ -172,16 +187,16 @@ async function scanDirectory(root: string, relativeDir: string, depth: number, m
       name: entry.name,
       item_type: itemType,
       extension: itemType === 'file' ? path.extname(entry.name).toLowerCase() || null : null,
-      size_bytes: itemType === 'file' ? stats.size : null,
-      modified_at: stats.mtime ? stats.mtime.toISOString() : null,
+      size_bytes: itemType === 'file' ? fileStats.size : null,
+      modified_at: fileStats.mtime ? fileStats.mtime.toISOString() : null,
       metadata: {
         depth,
-        symlink: stats.isSymbolicLink(),
+        symlink: fileStats.isSymbolicLink(),
       },
     });
 
     if (itemType === 'directory') {
-      await scanDirectory(root, relativePath, depth + 1, maxDepth, rows, maxItems);
+      await scanDirectory(root, relativePath, depth + 1, maxDepth, rows, maxItems, scanStats);
     }
   }
 }
@@ -260,7 +275,7 @@ async function archiveMissing(root: string, activePaths: string[], includedRoots
 async function upsertOperationalItems(rows: SourceFileRow[], root: string, includedRoots: string[]) {
   if (!mapToOperations()) return { mapped: 0, archived: 0 };
 
-  const eligibleRows = rows.filter((row) => row.item_type === 'file' || row.metadata.scan_root);
+  const eligibleRows = rows.filter((row) => row.item_type === 'file');
   if (!eligibleRows.length) return { mapped: 0, archived: 0 };
 
   const items = eligibleRows.map((row) => {
@@ -379,9 +394,13 @@ async function main() {
   const rootsToScan = includedTopLevels();
   const rows: SourceFileRow[] = [];
   const scannedRoots: string[] = [];
+  const scanStats: ScanStats = { failedDirs: [], failedItems: [], capped: false };
 
   for (const entry of rootsToScan) {
-    if (rows.length >= maxItems) break;
+    if (rows.length >= maxItems) {
+      scanStats.capped = true;
+      break;
+    }
     try {
       const stats = await lstat(path.join(resolvedRoot, entry));
       if (!stats.isDirectory()) continue;
@@ -402,15 +421,17 @@ async function main() {
           symlink: stats.isSymbolicLink(),
         },
       });
-      await scanDirectory(resolvedRoot, entry, 1, maxDepth, rows, maxItems);
+      await scanDirectory(resolvedRoot, entry, 1, maxDepth, rows, maxItems, scanStats);
     } catch {
+      scanStats.failedDirs.push(entry);
       continue;
     }
   }
 
   await upsertRows(rows);
-  const archived = await archiveMissing(resolvedRoot, rows.map((row) => row.relative_path), scannedRoots);
-  const operational = await upsertOperationalItems(rows, resolvedRoot, scannedRoots);
+  const canArchive = !scanStats.capped && scanStats.failedDirs.length === 0 && scanStats.failedItems.length === 0;
+  const archived = canArchive ? await archiveMissing(resolvedRoot, rows.map((row) => row.relative_path), scannedRoots) : 0;
+  const operational = await upsertOperationalItems(rows, resolvedRoot, canArchive ? scannedRoots : []);
 
   const fileCount = rows.filter((row) => row.item_type === 'file').length;
   const directoryCount = rows.filter((row) => row.item_type === 'directory').length;
@@ -438,6 +459,10 @@ async function main() {
     max_items: maxItems,
     included_roots: rootsToScan,
     scanned_roots: scannedRoots,
+    archive_enabled: canArchive,
+    capped: scanStats.capped,
+    failed_dirs: scanStats.failedDirs.slice(0, 20),
+    failed_items: scanStats.failedItems.slice(0, 20),
     roots: Object.fromEntries(Object.entries(rootCounts).sort((a, b) => b[1] - a[1])),
     extensions: Object.fromEntries(Object.entries(extensionCounts).sort((a, b) => b[1] - a[1]).slice(0, 12)),
   }));

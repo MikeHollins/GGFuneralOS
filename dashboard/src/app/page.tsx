@@ -195,13 +195,14 @@ function nameTokens(value: string) {
 function tokenMatchScore(candidate: string, target: string) {
   const candidateTokens = Array.from(new Set(nameTokens(candidate)));
   const targetTokens = new Set(nameTokens(target));
-  if (!candidateTokens.length || !targetTokens.size) return 0;
+  if (candidateTokens.length < 2 || targetTokens.size < 2) return 0;
   const matches = candidateTokens.filter((token) => targetTokens.has(token)).length;
-  return matches / candidateTokens.length;
+  return Math.min(matches / candidateTokens.length, matches / targetTokens.size);
 }
 
 function isServerMediaItem(item: DashboardItem) {
   const payload = sourcePayload(item);
+  if (cleanDisplay(payload.scan_root) === 'true' || cleanDisplay(payload.item_type) === 'directory') return false;
   const text = `${item.source} ${item.sourceRef ?? ''} ${payload.top_level ?? ''} ${payload.extension ?? ''}`.toLowerCase();
   return item.source.startsWith('SMB:') && (
     item.area === 'production' ||
@@ -489,7 +490,6 @@ function searchableItemText(item: DashboardItem) {
 function isWorkflowDone(item: DashboardItem, override?: StatusOverride) {
   const status = (override?.status ?? item.status).toLowerCase();
   return (
-    item.priority === 'done' ||
     status.includes('complete') ||
     status.includes('filed') ||
     status.includes('verified') ||
@@ -849,7 +849,7 @@ function WorkflowChecklist({
       <div className="border-b border-neutral-200 px-3 py-2">
         <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
       </div>
-      <div className="flex flex-wrap items-start gap-2 p-3">
+      <div className="columns-1 gap-2 p-3 md:columns-2 xl:columns-4">
         {familyWorkflow.map((step) => {
           const relatedItems = workflowItemsFor(record, step);
           const primary = relatedItems[0] ?? null;
@@ -862,7 +862,7 @@ function WorkflowChecklist({
           return (
             <div
               key={step.id}
-              className={`group w-full rounded-lg border transition hover:z-10 hover:shadow-lg focus-within:z-10 focus-within:shadow-lg md:w-[calc(50%-0.25rem)] xl:w-[calc(25%-0.375rem)] ${
+              className={`group relative mb-2 break-inside-avoid rounded-lg border transition hover:z-10 hover:shadow-lg focus-within:z-10 focus-within:shadow-lg ${
                 done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
               }`}
             >
@@ -883,7 +883,7 @@ function WorkflowChecklist({
                 </span>
               </button>
 
-              <div className={`${open ? 'block' : 'hidden'} space-y-2 border-t border-neutral-100 p-2 group-hover:block group-focus-within:block`}>
+              <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl group-hover:block group-focus-within:block`}>
                   {primary ? (
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
