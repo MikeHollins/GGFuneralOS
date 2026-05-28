@@ -282,6 +282,17 @@ function cleanDisplay(value: unknown) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function isTimeOnlyLabel(value: string) {
+  return /^\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?$/i.test(cleanDisplay(value));
+}
+
+function isPseudoCaseItem(item: DashboardItem) {
+  const payload = sourcePayload(item);
+  if (item.source === 'Arrangements' && isTimeOnlyLabel(item.label)) return true;
+  if (item.source === 'Arrangements' && cleanDisplay(payload.case_match_basis) !== 'arrangement calendar cell' && isTimeOnlyLabel(itemName(item))) return true;
+  return false;
+}
+
 function safeFieldValue(key: string, value: string) {
   const lowerKey = key.toLowerCase();
   const trimmed = value.trim();
@@ -421,6 +432,37 @@ function recordHasTodayWork(record: CaseRecord, statusOverrides: Record<string, 
   });
 }
 
+function isSameLocalDay(date: Date, compareTo: Date) {
+  return date.getFullYear() === compareTo.getFullYear() &&
+    date.getMonth() === compareTo.getMonth() &&
+    date.getDate() === compareTo.getDate();
+}
+
+function isSameLocalMonth(date: Date, compareTo: Date) {
+  return date.getFullYear() === compareTo.getFullYear() && date.getMonth() === compareTo.getMonth();
+}
+
+function firstCallsTodayCount(records: CaseRecord[]) {
+  const today = new Date();
+  const firstCallStep = familyWorkflow.find((step) => step.id === 'first-call');
+  if (!firstCallStep) return 0;
+
+  return records.filter((record) => {
+    const item = workflowItemsFor(record, firstCallStep)[0];
+    if (!item) return false;
+    return itemBusinessDates(item).some((date) => isSameLocalDay(date, today));
+  }).length;
+}
+
+function completedServicesThisMonthCount(records: CaseRecord[], statusOverrides: Record<string, StatusOverride>) {
+  const today = new Date();
+  return records.filter((record) => record.items.some((item) => (
+    item.area === 'service' &&
+    isWorkflowDone(item, statusOverrides[item.id]) &&
+    itemBusinessDates(item).some((date) => isSameLocalMonth(date, today))
+  ))).length;
+}
+
 function itemName(item: DashboardItem) {
   const payload = sourcePayload(item);
   return (
@@ -502,7 +544,8 @@ function collectTextEntries(item: DashboardItem) {
 }
 
 function ownerFor(items: DashboardItem[]) {
-  return items.find((item) => item.owner && item.owner !== 'Staff')?.owner || items[0]?.owner || 'Staff';
+  const badOwners = new Set(['Staff', 'Hearse', 'Limo', 'Programs', 'Flowers', 'Casket', 'No', 'Yes', 'N/A', 'NA']);
+  return items.find((item) => item.owner && !badOwners.has(item.owner))?.owner || items[0]?.owner || 'Staff';
 }
 
 function nextActionFor(items: DashboardItem[]) {
@@ -548,7 +591,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
   const knownCases: Array<{ key: string; name: string }> = [];
 
   for (const item of items) {
-    if (isServerMediaItem(item)) continue;
+    if (isServerMediaItem(item) || isPseudoCaseItem(item)) continue;
     const key = caseKeyForItem(item);
     groups.set(key, [...(groups.get(key) ?? []), item]);
     const name = itemName(item);
@@ -792,9 +835,20 @@ function WorkflowProgressCell({
           </button>
         ))}
       </div>
-      <div className="mt-1 truncate text-[11px] font-semibold text-neutral-500">
-        {doneCount}/{states.length} done{needed[0] ? ` · next: ${needed[0].step.shortLabel}` : ''}
+      <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-neutral-500">
+        <span className="shrink-0">{doneCount}/{states.length} done</span>
+        {needed[0] ? <span className="min-w-0 truncate">next: {needed[0].step.shortLabel}</span> : null}
+        <span className="ml-auto shrink-0 text-neutral-400">{record.updatedAt}</span>
       </div>
+    </div>
+  );
+}
+
+function HeaderMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="h-8 rounded-md border border-neutral-200 bg-white px-2 py-1 text-right leading-tight">
+      <div className="text-[9px] font-bold uppercase tracking-wide text-neutral-400">{label}</div>
+      <div className="text-sm font-black text-neutral-950">{value}</div>
     </div>
   );
 }
@@ -1669,6 +1723,11 @@ export default function BoardPage() {
     : feedMeta
       ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
       : `${visibleRecords.length} families shown`;
+  const firstCallsToday = useMemo(() => firstCallsTodayCount(caseRecords), [caseRecords]);
+  const servicesCompletedThisMonth = useMemo(
+    () => completedServicesThisMonthCount(caseRecords, statusOverrides),
+    [caseRecords, statusOverrides],
+  );
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
@@ -1709,6 +1768,10 @@ export default function BoardPage() {
           </div>
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
+            <div className="hidden items-center gap-1 lg:flex">
+              <HeaderMetric label="Calls today" value={firstCallsToday} />
+              <HeaderMetric label="Services month" value={servicesCompletedThisMonth} />
+            </div>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -1751,14 +1814,13 @@ export default function BoardPage() {
 
       <main className="p-3">
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(270px,1.55fr)_minmax(160px,0.9fr)_minmax(95px,0.5fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(250px,1.45fr)_minmax(150px,0.9fr)] max-lg:hidden">
+          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(330px,1.85fr)_minmax(180px,0.9fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(300px,1.65fr)_minmax(150px,0.9fr)] max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
-            <div className="px-2 py-2 max-xl:hidden">Owner</div>
-            <div className="px-2 py-2">Progress</div>
+            <div className="px-2 py-2 max-xl:hidden">Family Contact</div>
+            <div className="px-2 py-2">Status</div>
             <div className="px-2 py-2">Next Action</div>
-            <div className="px-2 py-2 max-xl:hidden">Updated</div>
           </div>
 
           <div className="divide-y divide-neutral-100">
@@ -1773,7 +1835,7 @@ export default function BoardPage() {
             ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
-                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(270px,1.55fr)_minmax(160px,0.9fr)_minmax(95px,0.5fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(250px,1.45fr)_minmax(150px,0.9fr)] max-lg:block"
+                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(330px,1.85fr)_minmax(180px,0.9fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(300px,1.65fr)_minmax(150px,0.9fr)] max-lg:block"
               >
                 <button
                   type="button"
@@ -1797,7 +1859,6 @@ export default function BoardPage() {
                   onOpenDetails={() => setSelectedKey(record.key)}
                 />
                 <div className="line-clamp-2 px-2 py-2 text-xs leading-5 text-neutral-700">{record.nextAction}</div>
-                <div className="px-2 py-2 text-xs text-neutral-500 max-xl:hidden">{record.updatedAt}</div>
               </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">

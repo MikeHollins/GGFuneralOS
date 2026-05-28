@@ -310,10 +310,40 @@ function first(record: Record<string, string>, keys: string[]) {
   return '';
 }
 
+function isTimeLike(value: string) {
+  return /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*$/i.test(value);
+}
+
+function cleanArrangementCell(value: string) {
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return '';
+  const withoutBlockPrefix = trimmed.replace(/^block\s*:?\s*/i, '').trim();
+  const normalized = withoutBlockPrefix.toLowerCase();
+  if (!withoutBlockPrefix || normalized === 'block' || normalized === 'lunch') return '';
+  if (isTimeLike(withoutBlockPrefix)) return '';
+  return withoutBlockPrefix;
+}
+
+function displayHeader(key: string) {
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function ownerValue(record: Record<string, string>, config: SheetConfig) {
+  const value = first(record, config.ownerKeys);
+  const normalized = value.toLowerCase();
+  if (['hearse', 'limo', 'programs', 'flowers', 'casket', 'no', 'yes', 'n/a', 'na'].includes(normalized)) return '';
+  return value;
+}
+
 function labelFor(record: Record<string, string>, config: SheetConfig) {
   const configured = first(record, config.labelKeys);
   if (configured) return configured;
   if (config.area === 'service') return '';
+  if (config.sheet.toLowerCase() === 'arrangements') return '';
 
   const nameKey = Object.keys(record).find((key) => key.includes('name') || key.includes('deceased'));
   if (nameKey && record[nameKey]?.trim()) return record[nameKey].trim();
@@ -403,13 +433,61 @@ function recordToItem(record: Record<string, string>, config: SheetConfig): Dash
     area: config.area,
     label,
     detail: detailFor(record, config),
-    owner: first(record, config.ownerKeys) || config.defaultOwner,
+    owner: ownerValue(record, config) || config.defaultOwner,
     due,
     source: config.sheet,
     status: config.defaultStatus,
     priority: derivePriority(record, config),
     options: optionsFor(config.area),
   };
+}
+
+function arrangementItems(record: Record<string, string>, config: SheetConfig) {
+  const time = first(record, ['time']);
+  const entries: Array<{ record: Record<string, string>; item: DashboardItem; sourceRef: string }> = [];
+  const skipKeys = new Set(['_row_number', 'time', 'block']);
+
+  for (const [key, value] of Object.entries(record)) {
+    if (skipKeys.has(key) || key.startsWith('column_')) continue;
+    const label = cleanArrangementCell(value);
+    if (!label) continue;
+
+    const dayLabel = displayHeader(key);
+    const rowNumber = record._row_number;
+    const due = compact([dayLabel, time]);
+    const payload = {
+      ...record,
+      appointment_column: key,
+      appointment_day: dayLabel,
+      appointment_time: time,
+      appointment_label: label,
+    };
+
+    entries.push({
+      record: payload,
+      sourceRef: `${config.sheet}!${rowNumber}:${key}`,
+      item: {
+        id: `sheet-${slug(config.sheet)}-${rowNumber}-${slug(key)}`,
+        area: config.area,
+        label,
+        detail: detailFor(payload, config),
+        owner: config.defaultOwner,
+        due,
+        source: config.sheet,
+        status: config.defaultStatus,
+        priority: due ? 'high' : 'normal',
+        options: optionsFor(config.area),
+      },
+    });
+  }
+
+  return entries;
+}
+
+function recordToItemEntries(record: Record<string, string>, config: SheetConfig) {
+  if (config.sheet.toLowerCase() === 'arrangements') return arrangementItems(record, config);
+  const item = recordToItem(record, config);
+  return item ? [{ record, item, sourceRef: `${item.source}!${record._row_number}` }] : [];
 }
 
 type ImportRow = {
@@ -428,7 +506,7 @@ type ImportRow = {
   source_content_hash: string;
 };
 
-function importRowFor(item: DashboardItem, record: Record<string, string>): ImportRow {
+function importRowFor(item: DashboardItem, record: Record<string, string>, sourceRef = `${item.source}!${record._row_number}`): ImportRow {
   return {
     item_id: item.id,
     area: item.area,
@@ -440,11 +518,11 @@ function importRowFor(item: DashboardItem, record: Record<string, string>): Impo
     status_default: item.status,
     priority: item.priority,
     options: item.options,
-    source_ref: `${item.source}!${record._row_number}`,
+    source_ref: sourceRef,
     source_payload: {
       ...record,
       case_match_key: caseMatchKey(item.label),
-      case_match_basis: 'source name field',
+      case_match_basis: item.source === 'Arrangements' ? 'arrangement calendar cell' : 'source name field',
     },
     source_content_hash: hashRecord(record),
   };
@@ -553,11 +631,11 @@ export async function syncWeeklyServiceSchedule() {
     const config = configs[index];
     const rows = response.valueRanges?.[index]?.values ?? [];
     const records = rowsToRecords(rows);
-    const items = records.map((record) => ({ record, item: recordToItem(record, config) })).filter((entry) => entry.item);
+    const items = records.flatMap((record) => recordToItemEntries(record, config));
 
     importedBySheet[config.sheet] = items.length;
     for (const entry of items) {
-      importRows.push(importRowFor(entry.item as DashboardItem, entry.record));
+      importRows.push(importRowFor(entry.item, entry.record, entry.sourceRef));
     }
   }
 
