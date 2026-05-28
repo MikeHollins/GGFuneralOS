@@ -1291,7 +1291,8 @@ export default function BoardPage() {
     return caseRecords
       .filter((record) => recordMatchesView(record, activeView))
       .filter((record) => !normalized || record.searchText.includes(normalized))
-      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
+      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name))
+      .slice(0, 200);
   }, [activeView, caseRecords, search]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const hasSourceIssue = sources.some((source) => source.status === 'unavailable');

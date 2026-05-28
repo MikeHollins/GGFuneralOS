@@ -56,7 +56,7 @@ async function seedItemsIfEmpty() {
   }
 }
 
-async function getItems() {
+async function getItems(limit = 750) {
   const sql = getSql();
   await seedItemsIfEmpty();
   const rows = await sql(
@@ -75,7 +75,9 @@ async function getItems() {
          WHEN 'paperwork' THEN 8
          ELSE 99
        END,
-       created_at`,
+       created_at
+     LIMIT $1`,
+    [limit],
   );
   return rows.map(toDashboardItem);
 }
@@ -206,8 +208,9 @@ export async function GET() {
   if (isAuthError(session)) return session;
 
   const checkedAt = new Date().toISOString();
+  const initialLimit = 750;
   const [items, itemAudit, ...sources] = await Promise.all([
-    getItems(),
+    getItems(initialLimit),
     getRecentItemAudit(),
     checkGoogleSheet(checkedAt),
     checkSmbShare(checkedAt),
