@@ -34,7 +34,7 @@ type StatusOverride = {
 
 type SourceHealth = OperationsFeed['sources'][number];
 type FeedMeta = NonNullable<OperationsFeed['meta']>;
-type ViewId = 'active' | 'today' | 'cases' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
+type ViewId = 'active' | 'today' | 'cases' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
 type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority';
 
 type MenuEntry = {
@@ -51,6 +51,8 @@ type CaseRecord = {
   statusItem: DashboardItem;
   dateEntries: MenuEntry[];
   locationEntries: MenuEntry[];
+  serviceStaffEntries: MenuEntry[];
+  serviceLogisticsEntries: MenuEntry[];
   owner: string;
   nextAction: string;
   blocker: string;
@@ -79,11 +81,12 @@ const viewLabels: Record<ViewId, string> = {
   active: 'Active Cases',
   today: 'Today',
   cases: 'All Cases',
+  service: 'Service',
   arrangements: 'Arrangements',
   'death-certs': 'Death Certs',
-  cremains: 'Cremains',
+  cremains: 'Cremation',
   belongings: 'Belongings',
-  files: 'Files',
+  files: 'Production',
 };
 
 const appTopLinks = [
@@ -136,10 +139,28 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
   { label: 'Server folder', keys: ['top_level', 'parent_path', 'relative_path'] },
 ];
 
+const serviceStaffGroups: Array<{ label: string; keys: string[] }> = [
+  { label: 'Lead', keys: ['lead'] },
+  { label: 'Lady', keys: ['lady', 'lead_lady'] },
+  { label: 'Call', keys: ['call'] },
+];
+
+const serviceLogisticsGroups: Array<{ label: string; keys: string[] }> = [
+  { label: 'Arrival', keys: ['arrival'] },
+  { label: 'Hearse', keys: ['hearse'] },
+  { label: 'Limo', keys: ['limo'] },
+  { label: 'Casket', keys: ['casket'] },
+  { label: 'Flowers', keys: ['flowers'] },
+  { label: 'Programs', keys: ['programs'] },
+  { label: 'Color', keys: ['color'] },
+  { label: 'Extra', keys: ['extra'] },
+];
+
 const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
   active: null,
   today: null,
   cases: null,
+  service: ['service'],
   arrangements: ['arrangement'],
   'death-certs': ['death-cert'],
   cremains: ['cremains', 'crematory'],
@@ -178,7 +199,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     shortLabel: 'Svc',
     terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
     areas: ['service', 'arrangement'],
-    keys: ['service_type', 'disposition_type', 'service_date', 'service_time', 'service_location', 'cemetery', 'crematory'],
+    keys: ['service_type', 'disposition_type', 'service_date', 'service_time', 'service_location', 'cemetery', 'crematory', 'date', 'time', 'location', 'lead', 'lady', 'call', 'hearse', 'limo'],
   },
   {
     id: 'media-program',
@@ -359,14 +380,18 @@ function parseOperationalDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function itemOperationalDates(item: DashboardItem) {
+function itemBusinessDates(item: DashboardItem) {
   const payload = sourcePayload(item);
-  const businessDates = [
+  return [
     item.due,
     ...receivedDateKeys.map((key) => payload[key]),
   ]
     .map(parseOperationalDate)
     .filter((date): date is Date => Boolean(date));
+}
+
+function itemOperationalDates(item: DashboardItem) {
+  const businessDates = itemBusinessDates(item);
   if (businessDates.length) return businessDates;
 
   const createdAt = parseOperationalDate(item.createdAt);
@@ -378,6 +403,22 @@ function recordIsActive(record: CaseRecord) {
   cutoff.setDate(cutoff.getDate() - activeCaseWindowDays);
   cutoff.setHours(0, 0, 0, 0);
   return record.items.some((item) => itemOperationalDates(item).some((date) => date >= cutoff));
+}
+
+function recordHasTodayWork(record: CaseRecord, statusOverrides: Record<string, StatusOverride>) {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+
+  const datedToday = record.items.some((item) => itemBusinessDates(item).some((date) => date >= start && date <= end));
+  if (datedToday) return true;
+
+  return workflowStepStates(record, statusOverrides).some((state) => {
+    if (state.done || !state.item) return false;
+    return state.item.priority === 'critical' || state.item.status.toLowerCase().includes('needed') || state.item.status.toLowerCase().includes('missing');
+  });
 }
 
 function itemName(item: DashboardItem) {
@@ -543,6 +584,9 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     const statusItem = sortedItems.find((item) => item.area !== 'paperwork' && !item.source.startsWith('SMB:')) ?? primaryItem;
     const dateEntries = dedupeMenuEntries(sortedItems.flatMap((item) => collectGroupedEntries(item, dateGroups)));
     const locationEntries = dedupeMenuEntries(sortedItems.flatMap((item) => collectGroupedEntries(item, locationGroups)));
+    const serviceItems = sortedItems.filter((item) => item.area === 'service');
+    const serviceStaffEntries = dedupeMenuEntries(serviceItems.flatMap((item) => collectGroupedEntries(item, serviceStaffGroups)));
+    const serviceLogisticsEntries = dedupeMenuEntries(serviceItems.flatMap((item) => collectGroupedEntries(item, serviceLogisticsGroups)));
     const areaCounts = sortedItems.reduce<Partial<Record<OperationArea, number>>>((counts, item) => {
       counts[item.area] = (counts[item.area] ?? 0) + 1;
       return counts;
@@ -556,6 +600,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       statusItem,
       dateEntries,
       locationEntries,
+      serviceStaffEntries,
+      serviceLogisticsEntries,
       owner: ownerFor(sortedItems),
       nextAction: nextActionFor(sortedItems),
       blocker: blockerFor(sortedItems),
@@ -576,9 +622,10 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
   });
 }
 
-function recordMatchesView(record: CaseRecord, view: ViewId) {
+function recordMatchesView(record: CaseRecord, view: ViewId, statusOverrides: Record<string, StatusOverride>) {
   if (view === 'active') return recordIsActive(record);
-  if (view === 'today' || view === 'cases') return true;
+  if (view === 'today') return recordHasTodayWork(record, statusOverrides);
+  if (view === 'cases') return true;
   const filters = viewAreaFilters[view];
   if (!filters) return true;
   return record.items.some((item) => filters.includes(item.area) || (filters.includes('smb') && item.source.startsWith('SMB:')));
@@ -1300,6 +1347,30 @@ function DetailDrawer({
                 )) : <div className="py-3 text-sm text-neutral-500">No location values found.</div>}
               </div>
             </div>
+            <div className="rounded-lg border border-neutral-200 p-3">
+              <h3 className="text-sm font-bold text-neutral-950">Service staff</h3>
+              <div className="mt-2 grid gap-2 md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+                {record.serviceStaffEntries.length ? record.serviceStaffEntries.map((entry, index) => (
+                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
+                    <div className="font-semibold text-neutral-900">{entry.label}</div>
+                    <div className="break-words text-neutral-700">{entry.value}</div>
+                    <div className="text-xs text-neutral-400">{entry.source}</div>
+                  </div>
+                )) : <div className="py-3 text-sm text-neutral-500">No service staff values found.</div>}
+              </div>
+            </div>
+            <div className="rounded-lg border border-neutral-200 p-3">
+              <h3 className="text-sm font-bold text-neutral-950">Service logistics</h3>
+              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                {record.serviceLogisticsEntries.length ? record.serviceLogisticsEntries.map((entry, index) => (
+                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
+                    <div className="font-semibold text-neutral-900">{entry.label}</div>
+                    <div className="break-words text-neutral-700">{entry.value}</div>
+                    <div className="text-xs text-neutral-400">{entry.source}</div>
+                  </div>
+                )) : <div className="py-3 text-sm text-neutral-500">No service logistics values found.</div>}
+              </div>
+            </div>
             <div className="rounded-lg border border-neutral-200">
               <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</div>
               <div className="max-h-64 divide-y divide-neutral-100 overflow-auto">
@@ -1586,10 +1657,10 @@ export default function BoardPage() {
   const matchingRecords = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return caseRecords
-      .filter((record) => recordMatchesView(record, activeView))
+      .filter((record) => recordMatchesView(record, activeView, statusOverrides))
       .filter((record) => !normalized || record.searchText.includes(normalized))
       .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
-  }, [activeView, caseRecords, search]);
+  }, [activeView, caseRecords, search, statusOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const hasSourceIssue = sources.some((source) => source.status === 'unavailable');

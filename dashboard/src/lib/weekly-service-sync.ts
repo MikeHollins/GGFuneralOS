@@ -45,7 +45,7 @@ const sheetConfigs: SheetConfig[] = [
     area: 'service',
     labelKeys: ['deceased', 'name_of_deceased', 'name'],
     dueKeys: ['date', 'service_date', 'time', 'service_time'],
-    ownerKeys: ['lead', 'lead_lady', 'call', 'director'],
+    ownerKeys: ['lead', 'lady', 'lead_lady', 'call', 'director'],
     defaultOwner: 'Service team',
     defaultStatus: 'Needs info',
   },
