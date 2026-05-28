@@ -45,8 +45,14 @@ export const getOperationalStatuses = (itemIds?: string[]) =>
     itemIds?.length ? `/dashboard/operational-status?item_ids=${encodeURIComponent(itemIds.join(','))}` : '/dashboard/operational-status'
   );
 
-export const getOperationsFeed = () =>
-  apiFetch<OperationsFeed>('/dashboard/operations');
+export const getOperationsFeed = (params?: { q?: string; caseKey?: string; limit?: number }) => {
+  const search = new URLSearchParams();
+  if (params?.q) search.set('q', params.q);
+  if (params?.caseKey) search.set('case_key', params.caseKey);
+  if (params?.limit) search.set('limit', String(params.limit));
+  const query = search.toString();
+  return apiFetch<OperationsFeed>(`/dashboard/operations${query ? `?${query}` : ''}`);
+};
 
 export const updateOperationItem = (itemId: string, field: string, value: string) =>
   apiFetch<{ data: OperationsFeed['items'][number]; audit: OperationalItemAudit | null; changed: boolean }>(

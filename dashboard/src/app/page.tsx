@@ -1120,6 +1120,7 @@ export default function BoardPage() {
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const operationsRequestRef = useRef(0);
 
   useEffect(() => {
     const syncView = () => {
@@ -1129,12 +1130,24 @@ export default function BoardPage() {
     syncView();
     window.addEventListener('popstate', syncView);
     window.addEventListener('ggfo-view-change', syncView);
-    loadOperationsFeed();
     return () => {
       window.removeEventListener('popstate', syncView);
       window.removeEventListener('ggfo-view-change', syncView);
     };
   }, []);
+
+  useEffect(() => {
+    const delay = search.trim() ? 250 : 0;
+    const timeout = window.setTimeout(() => {
+      loadOperationsFeed({ query: search.trim() });
+    }, delay);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
+    if (!selectedKey) return;
+    loadOperationsFeed({ caseKey: selectedKey, merge: true, limit: 2000 });
+  }, [selectedKey]);
 
   function chooseView(view: ViewId) {
     setActiveView(view);
@@ -1145,10 +1158,24 @@ export default function BoardPage() {
     window.dispatchEvent(new CustomEvent('ggfo-view-change'));
   }
 
-  function loadOperationsFeed() {
-    return getOperationsFeed()
+  function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number } = {}) {
+    const requestId = options.merge ? operationsRequestRef.current : operationsRequestRef.current + 1;
+    if (!options.merge) operationsRequestRef.current = requestId;
+
+    return getOperationsFeed({
+      q: options.query || undefined,
+      caseKey: options.caseKey || undefined,
+      limit: options.limit,
+    })
       .then((response) => {
-        setItems(response.items as DashboardItem[]);
+        if (!options.merge && requestId !== operationsRequestRef.current) return;
+        setItems((current) => {
+          const nextItems = response.items as DashboardItem[];
+          if (!options.merge) return nextItems;
+          const byId = new Map(current.map((item) => [item.id, item]));
+          for (const item of nextItems) byId.set(item.id, item);
+          return Array.from(byId.values());
+        });
         setSources(response.sources ?? []);
         const itemAuditEntries: AuditEntry[] = (response.item_audit ?? []).map((entry) => ({
           kind: 'edit',
@@ -1174,7 +1201,7 @@ export default function BoardPage() {
 
   useEffect(() => {
     if (!items.length) return;
-    getOperationalStatuses()
+    getOperationalStatuses(items.map((item) => item.id).slice(0, 1000))
       .then((response) => {
         const nextOverrides: Record<string, StatusOverride> = {};
         for (const status of response.data) {
@@ -1212,7 +1239,7 @@ export default function BoardPage() {
     try {
       const response = await syncWeeklyServiceSchedule();
       setSheetSyncMessage(`Imported ${response.data.imported} master sheet rows.`);
-      await loadOperationsFeed();
+      await loadOperationsFeed({ query: search.trim() });
     } catch (error: any) {
       setSheetSyncMessage(error.message || 'Master sheet sync failed.');
     } finally {

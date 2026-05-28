@@ -56,13 +56,71 @@ async function seedItemsIfEmpty() {
   }
 }
 
-async function getItems(limit = 750) {
+function cleanLimit(value: string | null, fallback: number) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, 2000);
+}
+
+function caseKeyPattern(caseKey: string) {
+  const parts = caseKey
+    .toLowerCase()
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return `%${parts.join('%')}%`;
+}
+
+async function getItems({
+  limit = 750,
+  query = '',
+  caseKey = '',
+}: {
+  limit?: number;
+  query?: string;
+  caseKey?: string;
+}) {
   const sql = getSql();
   await seedItemsIfEmpty();
+  const filters = ['is_archived = false'];
+  const params: any[] = [];
+
+  const cleanQuery = query.trim().toLowerCase();
+  if (cleanQuery) {
+    params.push(`%${cleanQuery}%`);
+    const index = params.length;
+    filters.push(`(
+      lower(label) LIKE $${index}
+      OR lower(detail) LIKE $${index}
+      OR lower(owner) LIKE $${index}
+      OR lower(source) LIKE $${index}
+      OR lower(coalesce(source_ref, '')) LIKE $${index}
+      OR lower(source_payload::text) LIKE $${index}
+    )`);
+  }
+
+  const cleanCaseKey = caseKey.trim().toLowerCase();
+  if (cleanCaseKey) {
+    params.push(cleanCaseKey, caseKeyPattern(cleanCaseKey));
+    const exactIndex = params.length - 1;
+    const patternIndex = params.length;
+    filters.push(`(
+      lower(coalesce(source_payload->>'case_match_key', '')) = $${exactIndex}
+      OR regexp_replace(lower(coalesce(label, '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
+      OR regexp_replace(lower(coalesce(source_payload->>'name', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
+      OR regexp_replace(lower(coalesce(source_payload->>'name_of_deceased', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
+      OR regexp_replace(lower(coalesce(source_payload->>'deceased_name_last_first', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
+      OR lower(coalesce(source_ref, '')) LIKE $${patternIndex}
+    )`);
+  }
+
+  params.push(limit);
+  const limitIndex = params.length;
+
   const rows = await sql(
     `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options
      FROM operational_items
-     WHERE is_archived = false
+     WHERE ${filters.join(' AND ')}
      ORDER BY
        CASE area
          WHEN 'service' THEN 1
@@ -76,8 +134,8 @@ async function getItems(limit = 750) {
          ELSE 99
        END,
        created_at
-     LIMIT $1`,
-    [limit],
+     LIMIT $${limitIndex}`,
+    params,
   );
   return rows.map(toDashboardItem);
 }
@@ -203,14 +261,17 @@ async function checkSmbShare(checkedAt: string): Promise<SourceStatus> {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await requireStaff();
   if (isAuthError(session)) return session;
 
   const checkedAt = new Date().toISOString();
-  const initialLimit = 750;
+  const url = new URL(request.url);
+  const query = url.searchParams.get('q') ?? '';
+  const caseKey = url.searchParams.get('case_key') ?? '';
+  const initialLimit = cleanLimit(url.searchParams.get('limit'), caseKey ? 2000 : 750);
   const [items, itemAudit, ...sources] = await Promise.all([
-    getItems(initialLimit),
+    getItems({ limit: initialLimit, query, caseKey }),
     getRecentItemAudit(),
     checkGoogleSheet(checkedAt),
     checkSmbShare(checkedAt),
