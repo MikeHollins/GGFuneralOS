@@ -7,6 +7,7 @@ import {
   getOperationsFeed,
   saveOperationalStatus,
   syncWeeklyServiceSchedule,
+  updateOperationItem,
   type OperationsFeed,
 } from '@/lib/api';
 import { type DashboardItem, type OperationArea } from '@/lib/operation-items';
@@ -32,6 +33,7 @@ type StatusOverride = {
 
 type SourceHealth = OperationsFeed['sources'][number];
 type ViewId = 'today' | 'cases' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
+type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority';
 
 type MenuEntry = {
   label: string;
@@ -53,6 +55,13 @@ type CaseRecord = {
   updatedAt: string;
   areaCounts: Partial<Record<OperationArea, number>>;
   searchText: string;
+};
+
+type WorkflowStepDefinition = {
+  id: string;
+  label: string;
+  terms: string[];
+  areas: OperationArea[];
 };
 
 const viewLabels: Record<ViewId, string> = {
@@ -103,6 +112,57 @@ const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
   belongings: ['belongings'],
   files: ['smb', 'production', 'paperwork'],
 };
+
+const familyWorkflow: WorkflowStepDefinition[] = [
+  {
+    id: 'first-call',
+    label: 'First call',
+    terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'mokan', 'place of death'],
+    areas: ['paperwork'],
+  },
+  {
+    id: 'first-meeting',
+    label: 'First meeting',
+    terms: ['arrangement', 'appointment', 'meeting', 'conference'],
+    areas: ['arrangement'],
+  },
+  {
+    id: 'pickup',
+    label: 'Body pickup',
+    terms: ['pickup', 'pick up', 'removal', 'body', 'decedent', 'place of death', 'transfer'],
+    areas: ['paperwork'],
+  },
+  {
+    id: 'selection',
+    label: 'Service selection',
+    terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
+    areas: ['service', 'arrangement'],
+  },
+  {
+    id: 'media-program',
+    label: 'Media and program',
+    terms: ['media', 'photo', 'program', 'obituary', 'design', 'print', 'production'],
+    areas: ['production'],
+  },
+  {
+    id: 'death-cert',
+    label: 'Death certificate',
+    terms: ['death cert', 'certificate', 'doctor', 'medical', 'registrar', 'filed', 'dr name'],
+    areas: ['death-cert'],
+  },
+  {
+    id: 'disposition',
+    label: 'Service / disposition',
+    terms: ['service', 'cremation', 'crematory', 'cremains', 'burial', 'cemetery', 'committal'],
+    areas: ['service', 'crematory', 'cremains'],
+  },
+  {
+    id: 'closeout',
+    label: 'Closeout',
+    terms: ['payment', 'contract', 'belongings', 'release', 'aftercare', 'picked up', 'paperwork'],
+    areas: ['belongings', 'paperwork'],
+  },
+];
 
 function sourcePayload(item: DashboardItem) {
   return item.sourcePayload ?? {};
@@ -340,6 +400,43 @@ function readinessBadges(record: CaseRecord) {
   ];
 }
 
+function searchableItemText(item: DashboardItem) {
+  return [
+    item.area,
+    item.label,
+    item.detail,
+    item.owner,
+    item.due,
+    item.source,
+    item.status,
+    ...Object.entries(sourcePayload(item)).flatMap(([key, value]) => [key, cleanDisplay(value)]),
+  ].join(' ').toLowerCase();
+}
+
+function isWorkflowDone(item: DashboardItem, override?: StatusOverride) {
+  const status = (override?.status ?? item.status).toLowerCase();
+  return (
+    item.priority === 'done' ||
+    status.includes('complete') ||
+    status.includes('filed') ||
+    status.includes('verified') ||
+    status.includes('approved') ||
+    status.includes('published') ||
+    status.includes('printed') ||
+    status.includes('returned') ||
+    status.includes('released') ||
+    status.includes('picked up')
+  );
+}
+
+function workflowItemsFor(record: CaseRecord, step: WorkflowStepDefinition) {
+  const matches = record.items.filter((item) => {
+    const text = searchableItemText(item);
+    return step.areas.includes(item.area) || step.terms.some((term) => text.includes(term));
+  });
+  return matches.length ? matches : [];
+}
+
 function StatusChip({
   item,
   override,
@@ -477,6 +574,235 @@ function StatusChip({
   );
 }
 
+function EditableField({
+  label,
+  value,
+  itemId,
+  field,
+  multiline = false,
+  onUpdate,
+}: {
+  label: string;
+  value: string;
+  itemId: string;
+  field: Exclude<EditableItemField, 'priority'>;
+  multiline?: boolean;
+  onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [editing, value]);
+
+  async function save() {
+    const nextValue = draft.trim();
+    if (nextValue === value) {
+      setEditing(false);
+      setError('');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await onUpdate(itemId, field, nextValue);
+      setEditing(false);
+    } catch (err: any) {
+      setError(err.message || 'Could not save');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="group block w-full rounded-md bg-neutral-50 px-2 py-1.5 text-left text-xs transition hover:bg-[#fff7d7] hover:ring-1 hover:ring-[#efb70c]/40"
+        title={`Edit ${label}`}
+      >
+        <span className="block font-semibold text-neutral-500">{label}</span>
+        <span className={`block whitespace-pre-wrap break-words text-neutral-900 ${value ? '' : 'text-neutral-400'}`}>
+          {value || 'Click to set'}
+        </span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-[#efb70c]/40 bg-[#fffaf0] p-2">
+      <label className="block text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{label}</label>
+      {multiline ? (
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') save();
+            if (event.key === 'Escape') setEditing(false);
+          }}
+          rows={3}
+          className="mt-1 w-full resize-y rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+          autoFocus
+        />
+      ) : (
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') save();
+            if (event.key === 'Escape') setEditing(false);
+          }}
+          className="mt-1 h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+          autoFocus
+        />
+      )}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="text-xs text-red-700">{error}</span>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setEditing(false)} className="h-8 rounded-md px-2 text-xs font-semibold text-neutral-500 hover:bg-neutral-100">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="h-8 rounded-md bg-black px-3 text-xs font-semibold text-[#efb70c] disabled:opacity-60"
+          >
+            {saving ? 'Saving' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PrioritySelect({
+  item,
+  onUpdate,
+}: {
+  item: DashboardItem;
+  onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function changePriority(value: string) {
+    if (value === item.priority) return;
+    setSaving(true);
+    try {
+      await onUpdate(item.id, 'priority', value);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <label className="block rounded-md bg-neutral-50 px-2 py-1.5 text-xs">
+      <span className="block font-semibold text-neutral-500">Priority</span>
+      <select
+        value={item.priority}
+        disabled={saving}
+        onChange={(event) => changePriority(event.target.value)}
+        className="mt-1 h-8 w-full rounded-md border border-neutral-300 bg-white px-2 text-xs font-semibold capitalize outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+      >
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="normal">Normal</option>
+        <option value="done">Done</option>
+      </select>
+    </label>
+  );
+}
+
+function WorkflowChecklist({
+  record,
+  statusOverrides,
+  onCommit,
+  onUpdate,
+}: {
+  record: CaseRecord;
+  statusOverrides: Record<string, StatusOverride>;
+  onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
+  onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
+}) {
+  const [openStep, setOpenStep] = useState<string | null>('first-call');
+
+  return (
+    <section className="rounded-lg border border-neutral-200 bg-white">
+      <div className="border-b border-neutral-200 px-3 py-2">
+        <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
+      </div>
+      <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-4">
+        {familyWorkflow.map((step) => {
+          const relatedItems = workflowItemsFor(record, step);
+          const primary = relatedItems[0] ?? null;
+          const done = relatedItems.length > 0 && relatedItems.every((item) => isWorkflowDone(item, statusOverrides[item.id]));
+          const open = openStep === step.id;
+          const summary = primary
+            ? statusOverrides[primary.id]?.status ?? primary.status
+            : 'No linked item yet';
+
+          return (
+            <div key={step.id} className={`rounded-lg border ${done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'}`}>
+              <button
+                type="button"
+                onClick={() => setOpenStep(open ? null : step.id)}
+                className="flex min-h-16 w-full items-start gap-2 p-2 text-left"
+                aria-expanded={open}
+              >
+                <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs font-black ${
+                  done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-neutral-300 bg-white text-transparent'
+                }`}>
+                  ✓
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold text-neutral-950">{step.label}</span>
+                  <span className="mt-0.5 block truncate text-xs text-neutral-600">{summary}</span>
+                </span>
+              </button>
+
+              {open ? (
+                <div className="space-y-2 border-t border-neutral-100 p-2">
+                  {primary ? (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Update</span>
+                        <StatusChip item={primary} override={statusOverrides[primary.id]} onCommit={onCommit} />
+                      </div>
+                      <EditableField label="Note" value={primary.detail} itemId={primary.id} field="detail" multiline onUpdate={onUpdate} />
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                        <EditableField label="Owner" value={primary.owner} itemId={primary.id} field="owner" onUpdate={onUpdate} />
+                        <EditableField label="Due / time" value={primary.due} itemId={primary.id} field="due" onUpdate={onUpdate} />
+                      </div>
+                      {relatedItems.length > 1 ? (
+                        <div className="space-y-1">
+                          {relatedItems.slice(1, 4).map((item) => (
+                            <div key={item.id} className="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-2 py-1 text-xs">
+                              <span className="min-w-0 truncate font-semibold text-neutral-700">{item.label}</span>
+                              <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="rounded-md bg-neutral-50 px-2 py-2 text-xs text-neutral-500">
+                      No linked dashboard item was found for this stage yet.
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function MenuCell({
   label,
   entries,
@@ -530,19 +856,21 @@ function DetailDrawer({
   auditEntries,
   onClose,
   onCommit,
+  onUpdate,
 }: {
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
   auditEntries: AuditEntry[];
   onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
+  onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
 }) {
   if (!record) return null;
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/20" onClick={onClose}>
       <aside
-        className="h-full w-full max-w-3xl overflow-auto border-l border-neutral-200 bg-white shadow-2xl"
+        className="h-full w-full max-w-[calc(100vw-1rem)] overflow-auto border-l border-neutral-200 bg-white shadow-2xl sm:w-[94vw] 2xl:max-w-[1680px]"
         onClick={(event) => event.stopPropagation()}
         aria-label={`Details for ${record.name}`}
       >
@@ -559,13 +887,20 @@ function DetailDrawer({
           </div>
         </div>
 
-        <div className="grid gap-4 p-5">
-          <section className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-4 p-4 xl:p-5">
+          <WorkflowChecklist
+            record={record}
+            statusOverrides={statusOverrides}
+            onCommit={onCommit}
+            onUpdate={onUpdate}
+          />
+
+          <section className="grid gap-3 xl:grid-cols-2">
             <div className="rounded-lg border border-neutral-200 p-3">
               <h3 className="text-sm font-bold text-neutral-950">Date and time options</h3>
-              <div className="mt-2 divide-y divide-neutral-100">
+              <div className="mt-2 grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
                 {record.dateEntries.length ? record.dateEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="py-2 text-sm">
+                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
                     <div className="font-semibold text-neutral-900">{entry.label}</div>
                     <div className="text-neutral-700">{entry.value}</div>
                     <div className="text-xs text-neutral-400">{entry.source}</div>
@@ -575,9 +910,9 @@ function DetailDrawer({
             </div>
             <div className="rounded-lg border border-neutral-200 p-3">
               <h3 className="text-sm font-bold text-neutral-950">Location options</h3>
-              <div className="mt-2 divide-y divide-neutral-100">
+              <div className="mt-2 grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
                 {record.locationEntries.length ? record.locationEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="py-2 text-sm">
+                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
                     <div className="font-semibold text-neutral-900">{entry.label}</div>
                     <div className="break-words text-neutral-700">{entry.value}</div>
                     <div className="text-xs text-neutral-400">{entry.source}</div>
@@ -591,15 +926,22 @@ function DetailDrawer({
             <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Related work</div>
             <div className="divide-y divide-neutral-100">
               {record.items.map((item) => (
-                <div key={item.id} className="grid gap-3 p-3 md:grid-cols-[1fr_auto]">
+                <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] font-bold text-neutral-600">{item.source}</span>
                       <span className="text-[11px] text-neutral-400">{sourceRowLabel(item)}</span>
                     </div>
-                    <div className="mt-1 font-semibold text-neutral-950">{item.label}</div>
-                    <div className="mt-1 text-sm leading-5 text-neutral-600">{item.detail}</div>
-                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                      <EditableField label="Work item" value={item.label} itemId={item.id} field="label" onUpdate={onUpdate} />
+                      <EditableField label="Owner" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
+                      <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
+                      <PrioritySelect item={item} onUpdate={onUpdate} />
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <EditableField label="Staff note" value={item.detail} itemId={item.id} field="detail" multiline onUpdate={onUpdate} />
+                    <div className="mt-2 grid gap-1 md:grid-cols-2 2xl:grid-cols-3">
                       {collectTextEntries(item).slice(0, 10).map(([key, value]) => (
                         <div key={`${item.id}-${key}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
                           <span className="font-semibold text-neutral-500">{displayKey(key)}: </span>
@@ -608,7 +950,7 @@ function DetailDrawer({
                       ))}
                     </div>
                   </div>
-                  <div className="md:text-right">
+                  <div className="flex items-start justify-start xl:justify-end">
                     <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
                   </div>
                 </div>
@@ -796,6 +1138,25 @@ export default function BoardPage() {
     });
   }
 
+  async function updateItemField(itemId: string, field: EditableItemField, value: string) {
+    const saved = await updateOperationItem(itemId, field, value);
+    setItems((current) => current.map((item) => (item.id === itemId ? saved.data as DashboardItem : item)));
+
+    if (saved.audit) {
+      const entry: AuditEntry = {
+        kind: 'edit',
+        itemId: saved.audit.item_id,
+        label: saved.audit.item_label,
+        from: saved.audit.old_value,
+        to: saved.audit.new_value,
+        staffName: saved.audit.staff_name,
+        fieldName: saved.audit.field_name,
+        changedAt: saved.audit.created_at,
+      };
+      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
+    }
+  }
+
   const caseRecords = useMemo(() => buildCases(items, auditEntries), [items, auditEntries]);
   const visibleRecords = useMemo(() => {
     const normalized = search.trim().toLowerCase();
@@ -939,6 +1300,7 @@ export default function BoardPage() {
         auditEntries={auditEntries}
         onClose={() => setSelectedKey(null)}
         onCommit={commitStatus}
+        onUpdate={updateItemField}
       />
 
       {syncState === 'unavailable' ? (
