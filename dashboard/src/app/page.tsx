@@ -862,7 +862,7 @@ function WorkflowChecklist({
           return (
             <div
               key={step.id}
-              className={`group relative mb-2 break-inside-avoid rounded-lg border transition hover:z-10 hover:shadow-lg focus-within:z-10 focus-within:shadow-lg ${
+              className={`relative mb-2 break-inside-avoid rounded-lg border transition focus-within:z-10 focus-within:shadow-lg ${
                 done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
               }`}
             >
@@ -883,7 +883,7 @@ function WorkflowChecklist({
                 </span>
               </button>
 
-              <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl group-hover:block group-focus-within:block`}>
+              <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl`}>
                   {primary ? (
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
