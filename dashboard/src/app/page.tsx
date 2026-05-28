@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   getOperationalStatuses,
@@ -63,6 +64,12 @@ const viewLabels: Record<ViewId, string> = {
   belongings: 'Belongings',
   files: 'Files',
 };
+
+const appTopLinks = [
+  { href: '/texts', label: 'Texts' },
+  { href: '/payments', label: 'Payments' },
+  { href: '/staff', label: 'Staff/Admin' },
+];
 
 const dateGroups: Array<{ label: string; keys: string[] }> = [
   { label: 'Arrangement', keys: ['arrangement_date', 'appointment_date', 'appointment_time'] },
@@ -803,10 +810,15 @@ export default function BoardPage() {
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
       <header className="sticky top-0 z-20 border-b border-neutral-200 bg-white">
-        <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">KC Golden Gate Operations</div>
-            <h1 className="truncate text-xl font-bold text-black">{viewLabels[activeView]}</h1>
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white p-1">
+              <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-[#a77d00]">KC Golden Gate</div>
+              <h1 className="truncate text-lg font-bold text-black">{viewLabels[activeView]}</h1>
+            </div>
           </div>
           <div className="flex flex-wrap gap-1">
             {(Object.keys(viewLabels) as ViewId[]).map((view) => (
@@ -821,20 +833,30 @@ export default function BoardPage() {
                 {viewLabels[view]}
               </button>
             ))}
+            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
+            {appTopLinks.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+              >
+                {link.label}
+              </Link>
+            ))}
           </div>
-          <div className="ml-auto flex min-w-[280px] flex-1 items-center justify-end gap-2">
+          <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search family or deceased"
-              className="h-9 w-full max-w-sm rounded-md border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+              placeholder="Search family"
+              className="h-8 w-48 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:w-56"
               aria-label="Search family or deceased"
             />
             <button
               type="button"
               onClick={() => setShowSources((value) => !value)}
               title="Source diagnostics"
-              className={`h-9 rounded-md border px-3 text-xs font-bold ${hasSourceIssue ? 'border-red-300 bg-red-50 text-red-800' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}
+              className={`h-8 rounded-md border px-2.5 text-xs font-bold ${hasSourceIssue ? 'border-red-300 bg-red-50 text-red-800' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}
             >
               Sources
             </button>
