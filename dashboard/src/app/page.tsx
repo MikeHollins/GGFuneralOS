@@ -995,11 +995,13 @@ function DetailDrawer({
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/20" onClick={onClose}>
       <aside
-        className="h-full w-full max-w-[calc(100vw-1rem)] overflow-auto border-l border-neutral-200 bg-white shadow-2xl sm:w-[94vw] 2xl:max-w-[1680px]"
+        role="dialog"
+        aria-modal="true"
+        className="h-dvh w-[95vw] max-w-[1840px] overflow-hidden border-l border-neutral-200 bg-white shadow-2xl max-sm:w-[98vw]"
         onClick={(event) => event.stopPropagation()}
         aria-label={`Details for ${record.name}`}
       >
-        <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white px-5 py-4">
+        <div className="border-b border-neutral-200 bg-white px-5 py-3">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">Family detail</div>
@@ -1012,18 +1014,20 @@ function DetailDrawer({
           </div>
         </div>
 
-        <div className="grid gap-4 p-4 xl:p-5">
-          <WorkflowChecklist
-            record={record}
-            statusOverrides={statusOverrides}
-            onCommit={onCommit}
-            onUpdate={onUpdate}
-          />
+        <div className="grid h-[calc(100dvh-73px)] gap-3 overflow-auto p-3 xl:grid-cols-[minmax(460px,1.15fr)_minmax(420px,1fr)_minmax(360px,0.85fr)] xl:grid-rows-[auto_minmax(0,1fr)] xl:overflow-hidden">
+          <div className="min-h-0 xl:col-span-2">
+            <WorkflowChecklist
+              record={record}
+              statusOverrides={statusOverrides}
+              onCommit={onCommit}
+              onUpdate={onUpdate}
+            />
+          </div>
 
-          <section className="grid gap-3 xl:grid-cols-2">
+          <section className="grid min-h-0 gap-3 overflow-auto xl:col-start-3 xl:row-span-2">
             <div className="rounded-lg border border-neutral-200 p-3">
               <h3 className="text-sm font-bold text-neutral-950">Date and time options</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
+              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                 {record.dateEntries.length ? record.dateEntries.map((entry, index) => (
                   <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
                     <div className="font-semibold text-neutral-900">{entry.label}</div>
@@ -1035,7 +1039,7 @@ function DetailDrawer({
             </div>
             <div className="rounded-lg border border-neutral-200 p-3">
               <h3 className="text-sm font-bold text-neutral-950">Location options</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
+              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                 {record.locationEntries.length ? record.locationEntries.map((entry, index) => (
                   <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
                     <div className="font-semibold text-neutral-900">{entry.label}</div>
@@ -1045,9 +1049,25 @@ function DetailDrawer({
                 )) : <div className="py-3 text-sm text-neutral-500">No location values found.</div>}
               </div>
             </div>
+            <div className="rounded-lg border border-neutral-200">
+              <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</div>
+              <div className="max-h-64 divide-y divide-neutral-100 overflow-auto">
+                {auditEntries.filter((entry) => record.items.some((item) => item.id === entry.itemId)).slice(0, 12).map((entry) => (
+                  <div key={`${entry.changedAt}-${entry.itemId}-${entry.fieldName ?? entry.to}`} className="px-3 py-2 text-xs text-neutral-600">
+                    <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
+                    {' changed '}
+                    {entry.from ? <span>from {entry.from} </span> : null}
+                    {entry.to ? <span>to {entry.to} </span> : null}
+                    <span>on {formatStamp(entry.changedAt)}</span>
+                    {entry.initials ? <span> by {entry.initials}</span> : null}
+                    {entry.staffName ? <span> by {entry.staffName}</span> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
           </section>
 
-          <section className="rounded-lg border border-neutral-200">
+          <section className="min-h-0 overflow-auto rounded-lg border border-neutral-200 xl:col-span-2">
             <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Related work</div>
             <div className="divide-y divide-neutral-100">
               {record.items.map((item) => (
@@ -1078,23 +1098,6 @@ function DetailDrawer({
                   <div className="flex items-start justify-start xl:justify-end">
                     <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
                   </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-neutral-200">
-            <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</div>
-            <div className="divide-y divide-neutral-100">
-              {auditEntries.filter((entry) => record.items.some((item) => item.id === entry.itemId)).slice(0, 12).map((entry) => (
-                <div key={`${entry.changedAt}-${entry.itemId}-${entry.fieldName ?? entry.to}`} className="px-3 py-2 text-xs text-neutral-600">
-                  <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
-                  {' changed '}
-                  {entry.from ? <span>from {entry.from} </span> : null}
-                  {entry.to ? <span>to {entry.to} </span> : null}
-                  <span>on {formatStamp(entry.changedAt)}</span>
-                  {entry.initials ? <span> by {entry.initials}</span> : null}
-                  {entry.staffName ? <span> by {entry.staffName}</span> : null}
                 </div>
               ))}
             </div>
@@ -1386,20 +1389,23 @@ export default function BoardPage() {
 
           <div className="divide-y divide-neutral-100">
             {visibleRecords.length ? visibleRecords.map((record) => (
-              <button
+              <div
                 key={record.key}
-                type="button"
-                onClick={() => setSelectedKey(record.key)}
                 className="grid w-full grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:block"
               >
-                <div className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedKey(record.key)}
+                  className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7]"
+                  aria-label={`Open details for ${record.name}`}
+                >
                   <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
                   <div className="mt-1 flex flex-wrap gap-1">
                     {readinessBadges(record).filter((badge) => badge.active).map((badge) => (
                       <span key={badge.label} className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${badge.tone}`}>{badge.label}</span>
                     ))}
                   </div>
-                </div>
+                </button>
                 <div className="px-1 py-1.5"><MenuCell label="Date and time options" entries={record.dateEntries} /></div>
                 <div className="px-1 py-1.5"><MenuCell label="Location options" entries={record.locationEntries} /></div>
                 <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
@@ -1409,7 +1415,7 @@ export default function BoardPage() {
                 <div className="line-clamp-2 px-2 py-2 text-xs leading-5 text-neutral-700">{record.nextAction}</div>
                 <div className={`px-2 py-2 text-xs font-semibold ${record.blocker === 'None' ? 'text-neutral-400' : 'text-red-700'}`}>{record.blocker}</div>
                 <div className="px-2 py-2 text-xs text-neutral-500 max-xl:hidden">{record.updatedAt}</div>
-              </button>
+              </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">
                 No families matched this view.
