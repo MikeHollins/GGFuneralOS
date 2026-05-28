@@ -22,6 +22,8 @@ type SourceFileRow = {
 const ignoredNames = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '$RECYCLE.BIN', 'System Volume Information']);
 const defaultIncludedTopLevels = [
   '_PDF Programs',
+  '_Publisher Programs',
+  '_Pictures',
   '_Register Books',
   '_Lobby Docs',
   '_Lobby TV Videos',
@@ -87,7 +89,7 @@ function mapToOperations() {
 
 function areaForTopLevel(topLevel: string) {
   if (topLevel === 'MOKAN CREMATIONS') return 'crematory';
-  if (topLevel.includes('Program') || topLevel.includes('Lobby') || topLevel.includes('Register') || topLevel === '_Videos') return 'production';
+  if (topLevel.includes('Program') || topLevel.includes('Picture') || topLevel.includes('Lobby') || topLevel.includes('Register') || topLevel === '_Videos') return 'production';
   return 'paperwork';
 }
 
@@ -376,12 +378,14 @@ async function main() {
   const maxItems = envInt('GGFC_SMB_MAX_ITEMS', 2500);
   const rootsToScan = includedTopLevels();
   const rows: SourceFileRow[] = [];
+  const scannedRoots: string[] = [];
 
   for (const entry of rootsToScan) {
     if (rows.length >= maxItems) break;
     try {
       const stats = await lstat(path.join(resolvedRoot, entry));
       if (!stats.isDirectory()) continue;
+      scannedRoots.push(entry);
       rows.push({
         source_origin: 'smb',
         source_root: resolvedRoot,
@@ -405,8 +409,8 @@ async function main() {
   }
 
   await upsertRows(rows);
-  const archived = await archiveMissing(resolvedRoot, rows.map((row) => row.relative_path), rootsToScan);
-  const operational = await upsertOperationalItems(rows, resolvedRoot, rootsToScan);
+  const archived = await archiveMissing(resolvedRoot, rows.map((row) => row.relative_path), scannedRoots);
+  const operational = await upsertOperationalItems(rows, resolvedRoot, scannedRoots);
 
   const fileCount = rows.filter((row) => row.item_type === 'file').length;
   const directoryCount = rows.filter((row) => row.item_type === 'directory').length;
@@ -433,6 +437,7 @@ async function main() {
     max_depth: maxDepth,
     max_items: maxItems,
     included_roots: rootsToScan,
+    scanned_roots: scannedRoots,
     roots: Object.fromEntries(Object.entries(rootCounts).sort((a, b) => b[1] - a[1])),
     extensions: Object.fromEntries(Object.entries(extensionCounts).sort((a, b) => b[1] - a[1]).slice(0, 12)),
   }));

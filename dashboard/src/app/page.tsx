@@ -62,6 +62,7 @@ type WorkflowStepDefinition = {
   label: string;
   terms: string[];
   areas: OperationArea[];
+  keys: string[];
 };
 
 const viewLabels: Record<ViewId, string> = {
@@ -117,50 +118,58 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'first-call',
     label: 'First call',
-    terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'mokan', 'place of death'],
-    areas: ['paperwork'],
+    terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'place of death'],
+    areas: ['death-cert', 'paperwork'],
+    keys: ['case', 'place_of_death', 'hospice_nurse', 'phone', 'other_info'],
   },
   {
     id: 'first-meeting',
     label: 'First meeting',
     terms: ['arrangement', 'appointment', 'meeting', 'conference'],
     areas: ['arrangement'],
+    keys: ['arrangement_date', 'appointment_date', 'appointment_time', 'arrangement_location', 'package', 'contract'],
   },
   {
     id: 'pickup',
     label: 'Body pickup',
-    terms: ['pickup', 'pick up', 'removal', 'body', 'decedent', 'place of death', 'transfer'],
-    areas: ['paperwork'],
+    terms: ['pickup', 'pick up', 'removal', 'body', 'transfer', 'mokan'],
+    areas: ['crematory'],
+    keys: ['date_of_cremation', 'pick_up_date', 'place_of_death', 'mokan', 'column_3', 'other_info'],
   },
   {
     id: 'selection',
     label: 'Service selection',
     terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
     areas: ['service', 'arrangement'],
+    keys: ['service_type', 'disposition_type', 'service_date', 'service_time', 'service_location', 'cemetery', 'crematory'],
   },
   {
     id: 'media-program',
     label: 'Media and program',
     terms: ['media', 'photo', 'program', 'obituary', 'design', 'print', 'production'],
     areas: ['production'],
+    keys: ['relative_path', 'parent_path', 'extension', 'modified_at', 'size_bytes'],
   },
   {
     id: 'death-cert',
     label: 'Death certificate',
     terms: ['death cert', 'certificate', 'doctor', 'medical', 'registrar', 'filed', 'dr name'],
     areas: ['death-cert'],
+    keys: ['case', 'dr_name', 'hospice_nurse', 'place_of_death', 'state', 'c_j_email_dc'],
   },
   {
     id: 'disposition',
     label: 'Service / disposition',
     terms: ['service', 'cremation', 'crematory', 'cremains', 'burial', 'cemetery', 'committal'],
     areas: ['service', 'crematory', 'cremains'],
+    keys: ['date_of_cremation', 'date_of_return', 'pick_up_date', 'mokan', 'paid', 'urn', 'property'],
   },
   {
     id: 'closeout',
     label: 'Closeout',
     terms: ['payment', 'contract', 'belongings', 'release', 'aftercare', 'picked up', 'paperwork'],
-    areas: ['belongings', 'paperwork'],
+    areas: ['belongings', 'cremains'],
+    keys: ['paid', 'property', 'urn', 'date_of_return', 'pick_up_date', 'signature_of_receiver'],
   },
 ];
 
@@ -175,6 +184,35 @@ function normalizeKey(value: string) {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function nameTokens(value: string) {
+  return normalizeKey(value)
+    .split(' ')
+    .filter((token) => token.length > 1 && !['the', 'and', 'for', 'with'].includes(token));
+}
+
+function tokenMatchScore(candidate: string, target: string) {
+  const candidateTokens = Array.from(new Set(nameTokens(candidate)));
+  const targetTokens = new Set(nameTokens(target));
+  if (!candidateTokens.length || !targetTokens.size) return 0;
+  const matches = candidateTokens.filter((token) => targetTokens.has(token)).length;
+  return matches / candidateTokens.length;
+}
+
+function isServerMediaItem(item: DashboardItem) {
+  const payload = sourcePayload(item);
+  const text = `${item.source} ${item.sourceRef ?? ''} ${payload.top_level ?? ''} ${payload.extension ?? ''}`.toLowerCase();
+  return item.source.startsWith('SMB:') && (
+    item.area === 'production' ||
+    text.includes('program') ||
+    text.includes('publisher') ||
+    text.includes('picture') ||
+    text.includes('photo') ||
+    text.includes('video') ||
+    text.includes('register') ||
+    ['.pdf', '.pub', '.jpg', '.jpeg', '.png', '.heic', '.webp', '.mp4', '.pptx', '.doc', '.docx', '.zip'].includes(cleanDisplay(payload.extension).toLowerCase())
+  );
 }
 
 function cleanDisplay(value: unknown) {
@@ -290,8 +328,15 @@ function collectGroupedEntries(item: DashboardItem, groups: Array<{ label: strin
 }
 
 function collectTextEntries(item: DashboardItem) {
+  const redundantKeys = new Set([
+    'name',
+    'name_of_deceased',
+    'deceased_name_last_first',
+    'case_match_key',
+    'case_match_basis',
+  ]);
   return Object.entries(sourcePayload(item))
-    .filter(([key, value]) => !key.startsWith('_') && cleanDisplay(value))
+    .filter(([key, value]) => !key.startsWith('_') && !redundantKeys.has(key) && cleanDisplay(value))
     .map(([key, value]) => [key, safeFieldValue(key, cleanDisplay(value))] as const);
 }
 
@@ -339,8 +384,36 @@ function lastUpdatedFor(items: DashboardItem[], auditEntries: AuditEntry[]) {
 
 function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
   const groups = new Map<string, DashboardItem[]>();
+  const knownCases: Array<{ key: string; name: string }> = [];
+
   for (const item of items) {
+    if (isServerMediaItem(item)) continue;
     const key = caseKeyForItem(item);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+    const name = itemName(item);
+    if (!knownCases.some((known) => known.key === key)) {
+      knownCases.push({ key, name });
+    }
+  }
+
+  for (const item of items) {
+    if (!isServerMediaItem(item)) continue;
+    const payload = sourcePayload(item);
+    const mediaName = [
+      cleanDisplay(payload.case_match_key),
+      cleanDisplay(payload.name),
+      item.label,
+      item.sourceRef ?? '',
+    ].join(' ');
+    let best = { key: caseKeyForItem(item), score: 0 };
+    for (const knownCase of knownCases) {
+      const score = Math.max(
+        tokenMatchScore(knownCase.name, mediaName),
+        tokenMatchScore(knownCase.key, mediaName),
+      );
+      if (score > best.score) best = { key: knownCase.key, score };
+    }
+    const key = best.score >= 0.6 ? best.key : caseKeyForItem(item);
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
 
@@ -430,11 +503,52 @@ function isWorkflowDone(item: DashboardItem, override?: StatusOverride) {
 }
 
 function workflowItemsFor(record: CaseRecord, step: WorkflowStepDefinition) {
-  const matches = record.items.filter((item) => {
+  const scored = record.items.map((item) => {
     const text = searchableItemText(item);
-    return step.areas.includes(item.area) || step.terms.some((term) => text.includes(term));
+    const payload = sourcePayload(item);
+    const keyHits = step.keys.filter((key) => cleanDisplay(payload[key])).length;
+    const termHits = step.terms.filter((term) => text.includes(term)).length;
+    const areaHit = step.areas.includes(item.area) ? 2 : 0;
+    const mediaBoost = step.id === 'media-program' && isServerMediaItem(item) ? 3 : 0;
+    return { item, score: keyHits * 2 + termHits + areaHit + mediaBoost };
   });
-  return matches.length ? matches : [];
+  return scored
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || priorityRank(b.item) - priorityRank(a.item))
+    .map(({ item }) => item);
+}
+
+function workflowFacts(item: DashboardItem, step: WorkflowStepDefinition) {
+  const payload = sourcePayload(item);
+  const facts: Array<{ label: string; value: string }> = [];
+  for (const key of step.keys) {
+    const value = safeFieldValue(key, cleanDisplay(payload[key]));
+    if (!value) continue;
+    if (['case_match_key', 'case_match_basis', 'name', 'name_of_deceased', 'deceased_name_last_first'].includes(key)) continue;
+    facts.push({ label: displayKey(key), value });
+  }
+
+  if (step.id === 'media-program' && isServerMediaItem(item)) {
+    const extension = cleanDisplay(payload.extension).replace('.', '').toUpperCase();
+    const folder = cleanDisplay(payload.top_level) || cleanDisplay(payload.parent_path);
+    return [
+      { label: 'File', value: item.label },
+      extension ? { label: 'Type', value: extension } : null,
+      folder ? { label: 'Folder', value: folder } : null,
+      item.sourceRef ? { label: 'Path', value: item.sourceRef } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string }>;
+  }
+
+  return facts.slice(0, 5);
+}
+
+function workflowSummary(item: DashboardItem | null, step: WorkflowStepDefinition, override?: StatusOverride) {
+  if (!item) return 'No linked item yet';
+  const facts = workflowFacts(item, step);
+  const status = override?.status ?? item.status;
+  if (facts[0]) return facts[0].value;
+  if (item.due) return item.due;
+  return status;
 }
 
 function StatusChip({
@@ -728,25 +842,30 @@ function WorkflowChecklist({
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
 }) {
-  const [openStep, setOpenStep] = useState<string | null>('first-call');
+  const [openStep, setOpenStep] = useState<string | null>(null);
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white">
       <div className="border-b border-neutral-200 px-3 py-2">
         <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
       </div>
-      <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="flex flex-wrap items-start gap-2 p-3">
         {familyWorkflow.map((step) => {
           const relatedItems = workflowItemsFor(record, step);
           const primary = relatedItems[0] ?? null;
-          const done = relatedItems.length > 0 && relatedItems.every((item) => isWorkflowDone(item, statusOverrides[item.id]));
+          const done = primary ? isWorkflowDone(primary, statusOverrides[primary.id]) : false;
           const open = openStep === step.id;
-          const summary = primary
-            ? statusOverrides[primary.id]?.status ?? primary.status
-            : 'No linked item yet';
+          const summary = workflowSummary(primary, step, primary ? statusOverrides[primary.id] : undefined);
+          const facts = primary ? workflowFacts(primary, step) : [];
+          const detailItems = relatedItems.filter((item) => item.id !== primary?.id).slice(0, 5);
 
           return (
-            <div key={step.id} className={`rounded-lg border ${done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'}`}>
+            <div
+              key={step.id}
+              className={`group w-full rounded-lg border transition hover:z-10 hover:shadow-lg focus-within:z-10 focus-within:shadow-lg md:w-[calc(50%-0.25rem)] xl:w-[calc(25%-0.375rem)] ${
+                done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => setOpenStep(open ? null : step.id)}
@@ -764,24 +883,31 @@ function WorkflowChecklist({
                 </span>
               </button>
 
-              {open ? (
-                <div className="space-y-2 border-t border-neutral-100 p-2">
+              <div className={`${open ? 'block' : 'hidden'} space-y-2 border-t border-neutral-100 p-2 group-hover:block group-focus-within:block`}>
                   {primary ? (
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Update</span>
                         <StatusChip item={primary} override={statusOverrides[primary.id]} onCommit={onCommit} />
                       </div>
-                      <EditableField label="Note" value={primary.detail} itemId={primary.id} field="detail" multiline onUpdate={onUpdate} />
-                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                        <EditableField label="Owner" value={primary.owner} itemId={primary.id} field="owner" onUpdate={onUpdate} />
-                        <EditableField label="Due / time" value={primary.due} itemId={primary.id} field="due" onUpdate={onUpdate} />
-                      </div>
-                      {relatedItems.length > 1 ? (
+                      {facts.length ? (
+                        <div className="grid gap-1">
+                          {facts.map((fact) => (
+                            <div key={`${step.id}-${fact.label}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
+                              <span className="font-semibold text-neutral-500">{fact.label}: </span>
+                              <span className="text-neutral-900">{fact.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      <EditableField label="Staff note" value={primary.detail} itemId={primary.id} field="detail" multiline onUpdate={onUpdate} />
+                      {detailItems.length ? (
                         <div className="space-y-1">
-                          {relatedItems.slice(1, 4).map((item) => (
+                          {detailItems.map((item) => (
                             <div key={item.id} className="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-2 py-1 text-xs">
-                              <span className="min-w-0 truncate font-semibold text-neutral-700">{item.label}</span>
+                              <span className="min-w-0 truncate font-semibold text-neutral-700">
+                                {isServerMediaItem(item) ? item.sourceRef ?? item.label : item.source}
+                              </span>
                               <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
                             </div>
                           ))}
@@ -794,7 +920,6 @@ function WorkflowChecklist({
                     </div>
                   )}
                 </div>
-              ) : null}
             </div>
           );
         })}
