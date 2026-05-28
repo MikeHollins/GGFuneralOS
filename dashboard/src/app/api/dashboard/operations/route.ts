@@ -13,6 +13,12 @@ type SourceStatus = {
   checked_at: string;
 };
 
+type ItemQuery = {
+  limit?: number;
+  query?: string;
+  caseKey?: string;
+};
+
 function toDashboardItem(row: any): DashboardItem {
   return {
     id: row.item_id,
@@ -24,6 +30,7 @@ function toDashboardItem(row: any): DashboardItem {
     source: row.source,
     sourceRef: row.source_ref,
     sourcePayload: row.source_payload ?? {},
+    createdAt: row.created_at,
     status: row.status_default,
     priority: row.priority,
     options: Array.isArray(row.options) ? row.options : [],
@@ -71,17 +78,7 @@ function caseKeyPattern(caseKey: string) {
   return `%${parts.join('%')}%`;
 }
 
-async function getItems({
-  limit = 750,
-  query = '',
-  caseKey = '',
-}: {
-  limit?: number;
-  query?: string;
-  caseKey?: string;
-}) {
-  const sql = getSql();
-  await seedItemsIfEmpty();
+function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
   const filters = ['is_archived = false'];
   const params: any[] = [];
 
@@ -114,11 +111,24 @@ async function getItems({
     )`);
   }
 
+  return { filters, params };
+}
+
+async function getItems({
+  limit = 750,
+  query = '',
+  caseKey = '',
+}: ItemQuery) {
+  const sql = getSql();
+  await seedItemsIfEmpty();
+  const { filters, params } = itemFilters({ query, caseKey });
+
   params.push(limit);
   const limitIndex = params.length;
 
-  const rows = await sql(
-    `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options
+  const [rows, totalRows] = await Promise.all([
+    sql(
+      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, created_at, status_default, priority, options
      FROM operational_items
      WHERE ${filters.join(' AND ')}
      ORDER BY
@@ -135,9 +145,29 @@ async function getItems({
        END,
        created_at
      LIMIT $${limitIndex}`,
-    params,
-  );
-  return rows.map(toDashboardItem);
+      params,
+    ),
+    sql(
+      `SELECT COUNT(*)::int AS count
+       FROM operational_items
+       WHERE ${filters.join(' AND ')}`,
+      params.slice(0, -1),
+    ),
+  ]);
+
+  const items = rows.map(toDashboardItem);
+  const total = totalRows[0]?.count ?? items.length;
+  return {
+    items,
+    meta: {
+      total,
+      returned: items.length,
+      limit,
+      limited: total > items.length,
+      query: query.trim(),
+      case_key: caseKey.trim(),
+    },
+  };
 }
 
 async function getRecentItemAudit() {
@@ -270,7 +300,7 @@ export async function GET(request: Request) {
   const query = url.searchParams.get('q') ?? '';
   const caseKey = url.searchParams.get('case_key') ?? '';
   const initialLimit = cleanLimit(url.searchParams.get('limit'), caseKey ? 2000 : 750);
-  const [items, itemAudit, ...sources] = await Promise.all([
+  const [feed, itemAudit, ...sources] = await Promise.all([
     getItems({ limit: initialLimit, query, caseKey }),
     getRecentItemAudit(),
     checkGoogleSheet(checkedAt),
@@ -286,7 +316,8 @@ export async function GET(request: Request) {
   ]);
 
   return NextResponse.json({
-    items,
+    items: feed.items,
+    meta: feed.meta,
     item_audit: itemAudit,
     sources,
   });

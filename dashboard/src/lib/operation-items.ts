@@ -18,6 +18,7 @@ export type DashboardItem = {
   source: string;
   sourceRef?: string | null;
   sourcePayload?: Record<string, string>;
+  createdAt?: string;
   status: string;
   priority: 'critical' | 'high' | 'normal' | 'done';
   options: string[];

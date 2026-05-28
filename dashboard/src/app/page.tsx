@@ -32,7 +32,8 @@ type StatusOverride = {
 };
 
 type SourceHealth = OperationsFeed['sources'][number];
-type ViewId = 'today' | 'cases' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
+type FeedMeta = NonNullable<OperationsFeed['meta']>;
+type ViewId = 'active' | 'today' | 'cases' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
 type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority';
 
 type MenuEntry = {
@@ -66,8 +67,9 @@ type WorkflowStepDefinition = {
 };
 
 const viewLabels: Record<ViewId, string> = {
+  active: 'Active Cases',
   today: 'Today',
-  cases: 'Cases',
+  cases: 'All Cases',
   arrangements: 'Arrangements',
   'death-certs': 'Death Certs',
   cremains: 'Cremains',
@@ -79,6 +81,27 @@ const appTopLinks = [
   { href: '/texts', label: 'Texts' },
   { href: '/payments', label: 'Payments' },
   { href: '/staff', label: 'Staff/Admin' },
+];
+
+const visibleRecordLimit = 200;
+const activeCaseWindowDays = 45;
+
+const receivedDateKeys = [
+  'date_received',
+  'received_date',
+  'received',
+  'first_call_date',
+  'first_call',
+  'date_of_death',
+  'death_date',
+  'date',
+  'service_date',
+  'arrangement_date',
+  'appointment_date',
+  'date_of_cremation',
+  'pick_up_date',
+  'pickup_date',
+  'modified_at',
 ];
 
 const dateGroups: Array<{ label: string; keys: string[] }> = [
@@ -105,6 +128,7 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 ];
 
 const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
+  active: null,
   today: null,
   cases: null,
   arrangements: ['arrangement'],
@@ -287,6 +311,56 @@ function formatStamp(value: string) {
   }).format(date);
 }
 
+function parseOperationalDate(value: unknown) {
+  const text = cleanDisplay(value);
+  if (!text) return null;
+
+  const relative = text.toLowerCase();
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  if (relative === 'today' || relative.includes('due today')) return today;
+  if (relative === 'tomorrow') {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow;
+  }
+
+  const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    const parsed = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const slash = text.match(/\b(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})\b/);
+  if (slash) {
+    const year = Number(slash[3].length === 2 ? `20${slash[3]}` : slash[3]);
+    const parsed = new Date(year, Number(slash[1]) - 1, Number(slash[2]), 12);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function itemOperationalDates(item: DashboardItem) {
+  const payload = sourcePayload(item);
+  const candidates = [
+    item.createdAt,
+    item.due,
+    ...receivedDateKeys.map((key) => payload[key]),
+  ];
+  return candidates
+    .map(parseOperationalDate)
+    .filter((date): date is Date => Boolean(date));
+}
+
+function recordIsActive(record: CaseRecord) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - activeCaseWindowDays);
+  cutoff.setHours(0, 0, 0, 0);
+  return record.items.some((item) => itemOperationalDates(item).some((date) => date >= cutoff));
+}
+
 function itemName(item: DashboardItem) {
   const payload = sourcePayload(item);
   return (
@@ -326,6 +400,32 @@ function collectGroupedEntries(item: DashboardItem, groups: Array<{ label: strin
     entries.push({ label: 'Dashboard due', value: item.due, source: item.source });
   }
   return entries;
+}
+
+function dedupeMenuEntries(entries: MenuEntry[]) {
+  const byValue = new Map<string, { label: string; value: string; sources: Set<string> }>();
+  for (const entry of entries) {
+    const key = `${normalizeKey(entry.label)}|${normalizeKey(entry.value)}`;
+    const current = byValue.get(key);
+    if (current) {
+      current.sources.add(entry.source);
+      continue;
+    }
+    byValue.set(key, {
+      label: entry.label,
+      value: entry.value,
+      sources: new Set([entry.source]),
+    });
+  }
+
+  return Array.from(byValue.values()).map((entry) => {
+    const sources = Array.from(entry.sources);
+    return {
+      label: entry.label,
+      value: entry.value,
+      source: sources.length > 1 ? `${sources[0]} +${sources.length - 1}` : sources[0],
+    };
+  });
 }
 
 function collectTextEntries(item: DashboardItem) {
@@ -422,8 +522,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     const sortedItems = [...groupedItems].sort((a, b) => priorityRank(b) - priorityRank(a));
     const primaryItem = sortedItems[0];
     const statusItem = sortedItems.find((item) => item.area !== 'paperwork' && !item.source.startsWith('SMB:')) ?? primaryItem;
-    const dateEntries = sortedItems.flatMap((item) => collectGroupedEntries(item, dateGroups));
-    const locationEntries = sortedItems.flatMap((item) => collectGroupedEntries(item, locationGroups));
+    const dateEntries = dedupeMenuEntries(sortedItems.flatMap((item) => collectGroupedEntries(item, dateGroups)));
+    const locationEntries = dedupeMenuEntries(sortedItems.flatMap((item) => collectGroupedEntries(item, locationGroups)));
     const areaCounts = sortedItems.reduce<Partial<Record<OperationArea, number>>>((counts, item) => {
       counts[item.area] = (counts[item.area] ?? 0) + 1;
       return counts;
@@ -458,6 +558,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
 }
 
 function recordMatchesView(record: CaseRecord, view: ViewId) {
+  if (view === 'active') return recordIsActive(record);
   if (view === 'today' || view === 'cases') return true;
   const filters = viewAreaFilters[view];
   if (!filters) return true;
@@ -979,6 +1080,7 @@ function DetailDrawer({
   record,
   statusOverrides,
   auditEntries,
+  detailLoading,
   onClose,
   onCommit,
   onUpdate,
@@ -986,10 +1088,54 @@ function DetailDrawer({
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
   auditEntries: AuditEntry[];
+  detailLoading: boolean;
   onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!record) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const closeButton = closeButtonRef.current;
+    window.setTimeout(() => closeButton?.focus(), 0);
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onCloseRef.current();
+      if (event.key !== 'Tab') return;
+
+      const drawer = closeButtonRef.current?.closest('[role="dialog"]');
+      const focusable = Array.from(
+        drawer?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.offsetParent !== null || element === closeButtonRef.current);
+      if (!focusable.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [record]);
+
   if (!record) return null;
 
   return (
@@ -1008,13 +1154,18 @@ function DetailDrawer({
               <h2 className="mt-1 truncate text-xl font-bold text-neutral-950">{record.name}</h2>
               <div className="mt-1 text-xs text-neutral-500">{record.items.length} related source rows and files</div>
             </div>
-            <button type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
+            <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
               Close
             </button>
           </div>
         </div>
 
         <div className="grid h-[calc(100dvh-73px)] gap-3 overflow-auto p-3 xl:grid-cols-[minmax(460px,1.15fr)_minmax(420px,1fr)_minmax(360px,0.85fr)] xl:grid-rows-[auto_minmax(0,1fr)] xl:overflow-hidden">
+          {detailLoading ? (
+            <div className="xl:col-span-3 -mb-1 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-2 text-xs font-semibold text-neutral-800">
+              Loading all linked rows and files for this family.
+            </div>
+          ) : null}
           <div className="min-h-0 xl:col-span-2">
             <WorkflowChecklist
               record={record}
@@ -1109,13 +1260,17 @@ function DetailDrawer({
 }
 
 export default function BoardPage() {
-  const [activeView, setActiveView] = useState<ViewId>('today');
+  const [activeView, setActiveView] = useState<ViewId>('active');
   const [search, setSearch] = useState('');
   const [items, setItems] = useState<DashboardItem[]>([]);
+  const [feedMeta, setFeedMeta] = useState<FeedMeta | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
+  const [operationsLoading, setOperationsLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [operationsError, setOperationsError] = useState('');
   const [sheetSyncMessage, setSheetSyncMessage] = useState('');
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [showSources, setShowSources] = useState(false);
@@ -1125,7 +1280,7 @@ export default function BoardPage() {
   useEffect(() => {
     const syncView = () => {
       const view = new URLSearchParams(window.location.search).get('view') as ViewId | null;
-      setActiveView(view && viewLabels[view] ? view : 'today');
+      setActiveView(view && viewLabels[view] ? view : 'active');
     };
     syncView();
     window.addEventListener('popstate', syncView);
@@ -1152,7 +1307,7 @@ export default function BoardPage() {
   function chooseView(view: ViewId) {
     setActiveView(view);
     const url = new URL(window.location.href);
-    if (view === 'today') url.searchParams.delete('view');
+    if (view === 'active') url.searchParams.delete('view');
     else url.searchParams.set('view', view);
     window.history.replaceState({}, '', url);
     window.dispatchEvent(new CustomEvent('ggfo-view-change'));
@@ -1161,6 +1316,11 @@ export default function BoardPage() {
   function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number } = {}) {
     const requestId = options.merge ? operationsRequestRef.current : operationsRequestRef.current + 1;
     if (!options.merge) operationsRequestRef.current = requestId;
+    const isDetailFetch = Boolean(options.merge && options.caseKey);
+
+    if (isDetailFetch) setDetailLoading(true);
+    else setOperationsLoading(true);
+    setOperationsError('');
 
     return getOperationsFeed({
       q: options.query || undefined,
@@ -1176,6 +1336,7 @@ export default function BoardPage() {
           for (const item of nextItems) byId.set(item.id, item);
           return Array.from(byId.values());
         });
+        if (!options.merge && response.meta) setFeedMeta(response.meta);
         setSources(response.sources ?? []);
         const itemAuditEntries: AuditEntry[] = (response.item_audit ?? []).map((entry) => ({
           kind: 'edit',
@@ -1192,10 +1353,19 @@ export default function BoardPage() {
           .slice(0, 100));
         setSyncState('connected');
       })
-      .catch(() => {
-        setItems([]);
-        setSources([]);
+      .catch((error: any) => {
+        if (!options.merge && requestId !== operationsRequestRef.current) return;
+        if (!options.merge) {
+          setItems([]);
+          setFeedMeta(null);
+          setSources([]);
+        }
         setSyncState('unavailable');
+        setOperationsError(error?.message || (isDetailFetch ? 'Family detail could not load.' : 'Dashboard records could not load.'));
+      })
+      .finally(() => {
+        if (isDetailFetch) setDetailLoading(false);
+        else if (requestId === operationsRequestRef.current) setOperationsLoading(false);
       });
   }
 
@@ -1313,16 +1483,21 @@ export default function BoardPage() {
   }
 
   const caseRecords = useMemo(() => buildCases(items, auditEntries), [items, auditEntries]);
-  const visibleRecords = useMemo(() => {
+  const matchingRecords = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return caseRecords
       .filter((record) => recordMatchesView(record, activeView))
       .filter((record) => !normalized || record.searchText.includes(normalized))
-      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name))
-      .slice(0, 200);
+      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
   }, [activeView, caseRecords, search]);
+  const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const hasSourceIssue = sources.some((source) => source.status === 'unavailable');
+  const visibleSummary = operationsLoading
+    ? 'Loading dashboard records'
+    : feedMeta
+      ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
+      : `${visibleRecords.length} families shown`;
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
@@ -1362,6 +1537,7 @@ export default function BoardPage() {
             ))}
           </div>
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
+            <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -1416,7 +1592,15 @@ export default function BoardPage() {
           </div>
 
           <div className="divide-y divide-neutral-100">
-            {visibleRecords.length ? visibleRecords.map((record) => (
+            {operationsLoading ? (
+              <div className="px-4 py-12 text-center text-sm text-neutral-500">
+                Loading families.
+              </div>
+            ) : operationsError ? (
+              <div className="px-4 py-12 text-center text-sm text-red-700">
+                {operationsError}
+              </div>
+            ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
                 className="grid w-full grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:block"
@@ -1446,7 +1630,7 @@ export default function BoardPage() {
               </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">
-                No families matched this view.
+                {search.trim() ? 'No families matched this search.' : 'No families matched this view.'}
               </div>
             )}
           </div>
@@ -1457,6 +1641,7 @@ export default function BoardPage() {
         record={selectedRecord}
         statusOverrides={statusOverrides}
         auditEntries={auditEntries}
+        detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
         onCommit={commitStatus}
         onUpdate={updateItemField}

@@ -228,10 +228,19 @@ export interface OperationsFeed {
     source: string;
     sourceRef?: string | null;
     sourcePayload?: Record<string, string>;
+    createdAt?: string;
     status: string;
     priority: 'critical' | 'high' | 'normal' | 'done';
     options: string[];
   }>;
+  meta?: {
+    total: number;
+    returned: number;
+    limit: number;
+    limited: boolean;
+    query: string;
+    case_key: string;
+  };
   item_audit: OperationalItemAudit[];
   sources: Array<{
     id: string;
