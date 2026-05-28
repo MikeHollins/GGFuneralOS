@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { type ReactNode } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   getOperationalStatuses,
@@ -61,9 +62,17 @@ type CaseRecord = {
 type WorkflowStepDefinition = {
   id: string;
   label: string;
+  shortLabel: string;
   terms: string[];
   areas: OperationArea[];
   keys: string[];
+};
+
+type WorkflowStepState = {
+  step: WorkflowStepDefinition;
+  item: DashboardItem | null;
+  done: boolean;
+  summary: string;
 };
 
 const viewLabels: Record<ViewId, string> = {
@@ -142,6 +151,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'first-call',
     label: 'First call',
+    shortLabel: 'Call',
     terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'place of death'],
     areas: ['death-cert', 'paperwork'],
     keys: ['case', 'place_of_death', 'hospice_nurse', 'phone', 'other_info'],
@@ -149,6 +159,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'first-meeting',
     label: 'First meeting',
+    shortLabel: 'Meet',
     terms: ['arrangement', 'appointment', 'meeting', 'conference'],
     areas: ['arrangement'],
     keys: ['arrangement_date', 'appointment_date', 'appointment_time', 'arrangement_location', 'package', 'contract'],
@@ -156,6 +167,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'pickup',
     label: 'Body pickup',
+    shortLabel: 'Pick',
     terms: ['pickup', 'pick up', 'removal', 'body', 'transfer', 'mokan'],
     areas: ['crematory'],
     keys: ['date_of_cremation', 'pick_up_date', 'place_of_death', 'mokan', 'column_3', 'other_info'],
@@ -163,6 +175,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'selection',
     label: 'Service selection',
+    shortLabel: 'Svc',
     terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
     areas: ['service', 'arrangement'],
     keys: ['service_type', 'disposition_type', 'service_date', 'service_time', 'service_location', 'cemetery', 'crematory'],
@@ -170,6 +183,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'media-program',
     label: 'Media and program',
+    shortLabel: 'Media',
     terms: ['media', 'photo', 'program', 'obituary', 'design', 'print', 'production'],
     areas: ['production'],
     keys: ['relative_path', 'parent_path', 'extension', 'modified_at', 'size_bytes'],
@@ -177,6 +191,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'death-cert',
     label: 'Death certificate',
+    shortLabel: 'DC',
     terms: ['death cert', 'certificate', 'doctor', 'medical', 'registrar', 'filed', 'dr name'],
     areas: ['death-cert'],
     keys: ['case', 'dr_name', 'hospice_nurse', 'place_of_death', 'state', 'c_j_email_dc'],
@@ -184,6 +199,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'disposition',
     label: 'Service / disposition',
+    shortLabel: 'Disp',
     terms: ['service', 'cremation', 'crematory', 'cremains', 'burial', 'cemetery', 'committal'],
     areas: ['service', 'crematory', 'cremains'],
     keys: ['date_of_cremation', 'date_of_return', 'pick_up_date', 'mokan', 'paid', 'urn', 'property'],
@@ -191,6 +207,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
   {
     id: 'closeout',
     label: 'Closeout',
+    shortLabel: 'Close',
     terms: ['payment', 'contract', 'belongings', 'release', 'aftercare', 'picked up', 'paperwork'],
     areas: ['belongings', 'cremains'],
     keys: ['paid', 'property', 'urn', 'date_of_return', 'pick_up_date', 'signature_of_receiver'],
@@ -652,6 +669,87 @@ function workflowSummary(item: DashboardItem | null, step: WorkflowStepDefinitio
   if (facts[0]) return facts[0].value;
   if (item.due) return item.due;
   return status;
+}
+
+function workflowStepStates(record: CaseRecord, statusOverrides: Record<string, StatusOverride>) {
+  return familyWorkflow.map<WorkflowStepState>((step) => {
+    const item = workflowItemsFor(record, step)[0] ?? null;
+    const override = item ? statusOverrides[item.id] : undefined;
+    return {
+      step,
+      item,
+      done: item ? isWorkflowDone(item, override) : false,
+      summary: workflowSummary(item, step, override),
+    };
+  });
+}
+
+function WorkflowGlyph({ stepId }: { stepId: string }) {
+  const common = { fill: 'none', stroke: 'currentColor', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, strokeWidth: 2 };
+  const paths: Record<string, ReactNode> = {
+    'first-call': <path {...common} d="M7 5h4l1 4-2 1a12 12 0 0 0 4 4l1-2 4 1v4c0 1-1 2-2 2A14 14 0 0 1 5 7c0-1 1-2 2-2Z" />,
+    'first-meeting': <path {...common} d="M8 6V4m8 2V4M5 9h14M7 6h10a2 2 0 0 1 2 2v10H5V8a2 2 0 0 1 2-2Zm3 7h4" />,
+    pickup: <path {...common} d="M4 13V7h9v6m0-3h4l3 3v4h-2m-12 0H4v-4h16m-12 4a2 2 0 1 0 4 0m4 0a2 2 0 1 0 4 0" />,
+    selection: <path {...common} d="M6 19V9l6-4 6 4v10m-9 0v-6h6v6" />,
+    'media-program': <path {...common} d="M5 6h14v12H5zM8 15l3-3 2 2 2-3 3 4M9 9h.01" />,
+    'death-cert': <path {...common} d="M7 4h8l4 4v12H7zM15 4v5h4M10 13h6M10 17h4" />,
+    disposition: <path {...common} d="M12 4v16m-6-6h12M8 8l4-4 4 4M8 16l4 4 4-4" />,
+    closeout: <path {...common} d="m5 13 4 4L19 7M6 6h10M6 10h7" />,
+  };
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0">
+      {paths[stepId] ?? <circle {...common} cx="12" cy="12" r="7" />}
+    </svg>
+  );
+}
+
+function WorkflowProgressCell({
+  record,
+  statusOverrides,
+  onOpenDetails,
+}: {
+  record: CaseRecord;
+  statusOverrides: Record<string, StatusOverride>;
+  onOpenDetails: () => void;
+}) {
+  const states = workflowStepStates(record, statusOverrides);
+  const doneCount = states.filter((state) => state.done).length;
+  const needed = states.filter((state) => !state.done);
+
+  return (
+    <div className="px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {states.map((state) => (
+          <button
+            key={state.step.id}
+            type="button"
+            onClick={onOpenDetails}
+            title={`${state.step.label}: ${state.summary}`}
+            aria-label={`${state.step.label} ${state.done ? 'done' : 'needed'} for ${record.name}`}
+            className={`inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition ${
+              state.done
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                : state.item
+                  ? 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100'
+                  : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100'
+            }`}
+          >
+            <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${
+              state.done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-current bg-white/70 text-transparent'
+            }`}>
+              ✓
+            </span>
+            <WorkflowGlyph stepId={state.step.id} />
+            <span className="hidden 2xl:inline">{state.step.shortLabel}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 truncate text-[11px] font-semibold text-neutral-500">
+        {doneCount}/{states.length} done{needed[0] ? ` · next: ${needed[0].step.shortLabel}` : ''}
+      </div>
+    </div>
+  );
 }
 
 function StatusChip({
@@ -1582,15 +1680,14 @@ export default function BoardPage() {
 
       <main className="p-3">
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:hidden">
+          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(270px,1.55fr)_minmax(160px,0.9fr)_minmax(95px,0.5fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(250px,1.45fr)_minmax(150px,0.9fr)] max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
-            <div className="px-2 py-2">Owner</div>
-            <div className="px-2 py-2">Status</div>
+            <div className="px-2 py-2 max-xl:hidden">Owner</div>
+            <div className="px-2 py-2">Progress</div>
             <div className="px-2 py-2">Next Action</div>
-            <div className="px-2 py-2">Blocker</div>
-            <div className="px-2 py-2">Updated</div>
+            <div className="px-2 py-2 max-xl:hidden">Updated</div>
           </div>
 
           <div className="divide-y divide-neutral-100">
@@ -1605,7 +1702,7 @@ export default function BoardPage() {
             ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
-                className="grid w-full grid-cols-[minmax(170px,1.35fr)_minmax(150px,0.9fr)_minmax(145px,0.95fr)_minmax(90px,0.55fr)_minmax(115px,0.65fr)_minmax(155px,1fr)_minmax(105px,0.7fr)_minmax(95px,0.55fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.4fr)_minmax(155px,1fr)_minmax(130px,0.9fr)_minmax(115px,0.8fr)_minmax(155px,1fr)_minmax(90px,0.55fr)] max-lg:block"
+                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(270px,1.55fr)_minmax(160px,0.9fr)_minmax(95px,0.5fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(250px,1.45fr)_minmax(150px,0.9fr)] max-lg:block"
               >
                 <button
                   type="button"
@@ -1623,11 +1720,12 @@ export default function BoardPage() {
                 <div className="px-1 py-1.5"><MenuCell label="Date and time options" entries={record.dateEntries} /></div>
                 <div className="px-1 py-1.5"><MenuCell label="Location options" entries={record.locationEntries} /></div>
                 <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
-                <div className="px-2 py-2">
-                  <StatusChip item={record.statusItem} override={statusOverrides[record.statusItem.id]} onCommit={commitStatus} />
-                </div>
+                <WorkflowProgressCell
+                  record={record}
+                  statusOverrides={statusOverrides}
+                  onOpenDetails={() => setSelectedKey(record.key)}
+                />
                 <div className="line-clamp-2 px-2 py-2 text-xs leading-5 text-neutral-700">{record.nextAction}</div>
-                <div className={`px-2 py-2 text-xs font-semibold ${record.blocker === 'None' ? 'text-neutral-400' : 'text-red-700'}`}>{record.blocker}</div>
                 <div className="px-2 py-2 text-xs text-neutral-500 max-xl:hidden">{record.updatedAt}</div>
               </div>
             )) : (
