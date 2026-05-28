@@ -344,14 +344,16 @@ function parseOperationalDate(value: unknown) {
 
 function itemOperationalDates(item: DashboardItem) {
   const payload = sourcePayload(item);
-  const candidates = [
-    item.createdAt,
+  const businessDates = [
     item.due,
     ...receivedDateKeys.map((key) => payload[key]),
-  ];
-  return candidates
+  ]
     .map(parseOperationalDate)
     .filter((date): date is Date => Boolean(date));
+  if (businessDates.length) return businessDates;
+
+  const createdAt = parseOperationalDate(item.createdAt);
+  return createdAt ? [createdAt] : [];
 }
 
 function recordIsActive(record: CaseRecord) {
