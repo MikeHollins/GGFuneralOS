@@ -331,6 +331,7 @@ CREATE TABLE operational_items (
   source_payload JSONB NOT NULL DEFAULT '{}',
   source_seen_at TIMESTAMPTZ,
   source_content_hash TEXT,
+  date_of_death  TEXT,
   edited_fields  JSONB NOT NULL DEFAULT '{}',
   is_archived    BOOLEAN NOT NULL DEFAULT false,
   created_at     TIMESTAMPTZ DEFAULT now(),

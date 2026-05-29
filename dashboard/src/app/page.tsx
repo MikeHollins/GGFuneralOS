@@ -11,7 +11,7 @@ import {
   updateOperationItem,
   type OperationsFeed,
 } from '@/lib/api';
-import { type DashboardItem, type OperationArea } from '@/lib/operation-items';
+import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
 
 type AuditEntry = {
   kind: 'status' | 'edit';
@@ -35,7 +35,7 @@ type StatusOverride = {
 type SourceHealth = OperationsFeed['sources'][number];
 type FeedMeta = NonNullable<OperationsFeed['meta']>;
 type ViewId = 'active' | 'today' | 'cases' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
-type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority';
+type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority' | 'date_of_death';
 
 type MenuEntry = {
   label: string;
@@ -1014,6 +1014,8 @@ function EditableField({
   itemId,
   field,
   multiline = false,
+  inputType = 'text',
+  placeholder,
   onUpdate,
 }: {
   label: string;
@@ -1021,6 +1023,8 @@ function EditableField({
   itemId: string;
   field: Exclude<EditableItemField, 'priority'>;
   multiline?: boolean;
+  inputType?: 'text' | 'date';
+  placeholder?: string;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1084,7 +1088,10 @@ function EditableField({
         />
       ) : (
         <input
+          type={inputType}
           value={draft}
+          placeholder={placeholder}
+          max={inputType === 'date' ? new Date().toISOString().slice(0, 10) : undefined}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') save();
@@ -1112,6 +1119,70 @@ function EditableField({
       </div>
     </div>
   );
+}
+
+// Missouri MoEVR death-cert filing deadline (5 days from death, RSMo 193.145). Fail-closed:
+// if there is no Date of Death captured, prompt for it rather than inventing a deadline.
+function DeathCertDeadline({ item, effectiveStatus }: { item: DashboardItem; effectiveStatus: string }) {
+  if (item.area !== 'death-cert') return null;
+  const filed = (effectiveStatus || '').toLowerCase() === 'filed';
+  const deadline = deathCertDeadline(item.dateOfDeath);
+
+  if (!deadline) {
+    return (
+      <div className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800">
+        Add date of death to track the MoEVR 5-day filing deadline.
+      </div>
+    );
+  }
+  if (filed) {
+    return (
+      <div className="mt-1 rounded-md bg-neutral-100 px-2 py-1 text-[11px] font-semibold text-neutral-500">
+        Filed · MoEVR deadline was {deadline.deadlineLabel}
+      </div>
+    );
+  }
+  const tone =
+    deadline.status === 'overdue'
+      ? 'border-red-300 bg-red-50 text-red-800'
+      : deadline.status === 'due-soon'
+        ? 'border-amber-300 bg-amber-50 text-amber-800'
+        : 'border-emerald-300 bg-emerald-50 text-emerald-800';
+  const text =
+    deadline.status === 'overdue'
+      ? `MoEVR filing OVERDUE by ${Math.abs(deadline.daysRemaining)} day${Math.abs(deadline.daysRemaining) === 1 ? '' : 's'} (was due ${deadline.deadlineLabel})`
+      : `MoEVR filing due ${deadline.deadlineLabel} · ${deadline.daysRemaining} day${deadline.daysRemaining === 1 ? '' : 's'} left`;
+  return <div className={`mt-1 rounded-md border px-2 py-1 text-[11px] font-semibold ${tone}`}>{text}</div>;
+}
+
+// Compact board pill surfacing the most-urgent unfiled death-cert deadline for a case,
+// so overdue/imminent MoEVR filings are visible without opening the drawer. Renders
+// nothing unless a death-cert item has a real DOD and is past/within the window.
+function GridDeathCertPill({
+  record,
+  statusOverrides,
+}: {
+  record: CaseRecord;
+  statusOverrides: Record<string, StatusOverride>;
+}) {
+  let worst: { status: 'overdue' | 'due-soon'; daysRemaining: number } | null = null;
+  for (const item of record.items) {
+    if (item.area !== 'death-cert') continue;
+    const effective = (statusOverrides[item.id]?.status ?? item.status ?? '').toLowerCase();
+    if (effective === 'filed') continue;
+    const deadline = deathCertDeadline(item.dateOfDeath);
+    if (!deadline || deadline.status === 'ok') continue;
+    if (!worst || deadline.daysRemaining < worst.daysRemaining) {
+      worst = { status: deadline.status, daysRemaining: deadline.daysRemaining };
+    }
+  }
+  if (!worst) return null;
+  const tone = worst.status === 'overdue' ? 'bg-red-600 text-white' : 'bg-amber-500 text-white';
+  const label =
+    worst.status === 'overdue'
+      ? `DC filing overdue ${Math.abs(worst.daysRemaining)}d`
+      : `DC due ${worst.daysRemaining}d`;
+  return <span className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${tone}`}>{label}</span>;
 }
 
 function PrioritySelect({
@@ -1476,6 +1547,20 @@ function DetailDrawer({
                       <EditableField label="Family Contact" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
                       <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
                       <PrioritySelect item={item} onUpdate={onUpdate} />
+                      {item.area === 'death-cert' ? (
+                        <div className="sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                          <EditableField
+                            label="Date of death"
+                            value={item.dateOfDeath ?? ''}
+                            itemId={item.id}
+                            field="date_of_death"
+                            inputType="date"
+                            placeholder="YYYY-MM-DD"
+                            onUpdate={onUpdate}
+                          />
+                          <DeathCertDeadline item={item} effectiveStatus={statusOverrides[item.id]?.status ?? item.status} />
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="min-w-0">
@@ -1876,7 +1961,10 @@ export default function BoardPage() {
                   statusOverrides={statusOverrides}
                   onOpenDetails={() => setSelectedKey(record.key)}
                 />
-                <div className="line-clamp-2 px-2 py-2 text-xs leading-5 text-neutral-700">{record.nextAction}</div>
+                <div className="px-2 py-2 text-xs leading-5 text-neutral-700">
+                  <GridDeathCertPill record={record} statusOverrides={statusOverrides} />
+                  <div className="line-clamp-2">{record.nextAction}</div>
+                </div>
               </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">

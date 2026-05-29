@@ -228,6 +228,7 @@ export interface OperationsFeed {
     source: string;
     sourceRef?: string | null;
     sourcePayload?: Record<string, string>;
+    dateOfDeath?: string | null;
     createdAt?: string;
     status: string;
     priority: 'critical' | 'high' | 'normal' | 'done';

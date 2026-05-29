@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
 
-const editableFields = new Set(['label', 'detail', 'owner', 'due', 'priority']);
-const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'priority']);
+const editableFields = new Set(['label', 'detail', 'owner', 'due', 'priority', 'date_of_death']);
+const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'priority', 'date_of_death']);
 
 function cleanValue(field: string, value: unknown) {
   const text = String(value ?? '').trim();
@@ -11,6 +11,13 @@ function cleanValue(field: string, value: unknown) {
     throw new Error('Invalid priority');
   }
   if (field === 'label' && !text) throw new Error('Label is required');
+  if (field === 'date_of_death') {
+    if (!text) return ''; // clearing is allowed
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error('Date of death must be in YYYY-MM-DD format');
+    const parsed = new Date(`${text}T12:00:00`);
+    if (Number.isNaN(parsed.getTime())) throw new Error('Invalid date of death');
+    if (parsed.getTime() > Date.now()) throw new Error('Date of death cannot be in the future');
+  }
   return text;
 }
 
@@ -35,6 +42,7 @@ function toDashboardItem(row: any) {
     source: row.source,
     sourceRef: row.source_ref,
     sourcePayload: row.source_payload ?? {},
+    dateOfDeath: row.date_of_death ?? null,
     status: row.status_default,
     priority: row.priority,
     options: Array.isArray(row.options) ? row.options : [],
@@ -60,7 +68,7 @@ export async function PATCH(
     if (!selectableColumns.has(column)) return NextResponse.json({ error: 'Field is not editable' }, { status: 400 });
 
     const currentRows = await sql(
-      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options
+      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, status_default, priority, options
        FROM operational_items
        WHERE item_id = $1 AND is_archived = false`,
       [itemId],
@@ -83,7 +91,7 @@ export async function PATCH(
            edited_fields = edited_fields || jsonb_build_object($3::text, true),
            updated_at = now()
        WHERE item_id = $2 AND is_archived = false
-       RETURNING item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, status_default, priority, options`,
+       RETURNING item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, status_default, priority, options`,
       [value, itemId, field],
     );
 
