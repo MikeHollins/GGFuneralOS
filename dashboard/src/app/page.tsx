@@ -91,6 +91,11 @@ const viewLabels: Record<ViewId, string> = {
   files: 'Production',
 };
 
+// Primary navigation answers "which set of families do I look at?" — kept as buttons.
+const primaryViews: ViewId[] = ['active', 'today', 'cases'];
+// Category views are loose filters over the same table — collapsed into a compact menu.
+const categoryViews: ViewId[] = ['service', 'arrangements', 'death-certs', 'cremains', 'belongings', 'files'];
+
 const appTopLinks = [
   { href: '/texts', label: 'Texts' },
   { href: '/payments', label: 'Payments' },
@@ -1108,6 +1113,63 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
       <div className="text-[9px] font-bold uppercase tracking-wide text-neutral-400">{label}</div>
       <div className="text-sm font-black text-neutral-950">{value}</div>
     </div>
+  );
+}
+
+// Compact dropdown for the category filter-views, replacing six always-on header buttons.
+function ViewFilterMenu({ activeView, onChoose }: { activeView: ViewId; onChoose: (view: ViewId) => void }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const activeIsCategory = categoryViews.includes(activeView);
+
+  function openMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 200)) });
+    setOpen(true);
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Filter the list by category"
+        className={`flex h-8 items-center gap-1 rounded-md px-2.5 text-xs font-bold transition ${
+          activeIsCategory ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+        }`}
+      >
+        {activeIsCategory ? viewLabels[activeView] : 'Categories'}
+        <svg viewBox="0 0 24 24" className="h-3 w-3" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div role="menu" className="fixed z-50 w-48 rounded-lg border border-neutral-200 bg-white p-1 text-xs shadow-xl" style={{ top: pos.top, left: pos.left }}>
+            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-neutral-400">Filter by category</div>
+            {categoryViews.map((view) => (
+              <button
+                key={view}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onChoose(view);
+                  setOpen(false);
+                }}
+                className={`block w-full rounded-md px-2 py-1.5 text-left font-semibold transition ${
+                  activeView === view ? 'bg-black text-[#efb70c]' : 'text-neutral-700 hover:bg-neutral-100'
+                }`}
+              >
+                {viewLabels[view]}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -2182,8 +2244,8 @@ export default function BoardPage() {
               <h1 className="truncate text-lg font-bold text-black">{viewLabels[activeView]}</h1>
             </div>
           </div>
-          <div className="flex flex-wrap gap-1">
-            {(Object.keys(viewLabels) as ViewId[]).map((view) => (
+          <div className="flex flex-wrap items-center gap-1">
+            {primaryViews.map((view) => (
               <button
                 key={view}
                 type="button"
@@ -2195,6 +2257,7 @@ export default function BoardPage() {
                 {viewLabels[view]}
               </button>
             ))}
+            <ViewFilterMenu activeView={activeView} onChoose={chooseView} />
             <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
             {appTopLinks.map((link) => (
               <Link
