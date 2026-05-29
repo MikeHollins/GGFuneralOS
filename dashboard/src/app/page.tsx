@@ -6,7 +6,9 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   getOperationalStatuses,
   getOperationsFeed,
+  getWorkflowStates,
   saveOperationalStatus,
+  saveWorkflowState,
   syncWeeklyServiceSchedule,
   updateOperationItem,
   type OperationsFeed,
@@ -792,6 +794,119 @@ function workflowStepStates(record: CaseRecord, statusOverrides: Record<string, 
   });
 }
 
+type WorkflowOverride = { state: 'done' | 'pending'; initials: string; updatedAt: string };
+type WorkflowOverrideMap = Record<string, Record<string, WorkflowOverride>>;
+
+function effectiveItemStatus(item: DashboardItem, statusOverrides: Record<string, StatusOverride>) {
+  return (statusOverrides[item.id]?.status ?? item.status ?? '').toLowerCase();
+}
+
+// Evidence already present in a case's data, used to AUTO-derive workflow steps. Principle:
+// reaching a later milestone (a service date, a cremation date, a filed cert) proves the
+// prerequisite steps happened — "milestone backfill".
+function caseEvidence(record: CaseRecord, statusOverrides: Record<string, StatusOverride>) {
+  const items = record.items;
+  const payloads = items.map(sourcePayload);
+  const anyPayload = (keys: string[]) => payloads.some((payload) => keys.some((key) => cleanDisplay(payload[key])));
+  const statusIn = (area: OperationArea, needles: string[]) =>
+    items.some((item) => item.area === area && needles.some((needle) => effectiveItemStatus(item, statusOverrides).includes(needle)));
+  const hasArea = (...areas: OperationArea[]) => items.some((item) => areas.includes(item.area));
+
+  const serviceScheduled = items.some(
+    (item) => item.area === 'service' && (itemBusinessDates(item).length > 0 || Boolean(cleanDisplay(item.due))),
+  );
+  const hasLocation = anyPayload(['cemetery', 'cemetery_name', 'committal_location', 'service_location', 'crematory']);
+  const bodyInCustody = anyPayload(['at_mokan_since', 'date_of_cremation', 'pick_up_date', 'mokan']);
+  const hasSelection = anyPayload(['casket', 'package', 'contract', 'disposition_type', 'service_type', 'urn']) || serviceScheduled;
+  const cremationDone = anyPayload(['date_of_cremation']);
+  const cremainsBack = statusIn('cremains', ['returned', 'picked up']) || anyPayload(['date_of_return', 'pick_up_date']);
+  const dispositionDone = cremationDone || cremainsBack || statusIn('crematory', ['completed', 'returned']);
+
+  return {
+    exists: items.length > 0,
+    hasArrangement: hasArea('arrangement'),
+    serviceScheduled,
+    hasLocation,
+    bodyInCustody,
+    hasSelection,
+    hasMedia: items.some(isServerMediaItem),
+    dcFiled: statusIn('death-cert', ['filed']),
+    dispositionDone,
+    cremainsBack,
+    belongingsReleased: statusIn('belongings', ['released']),
+    hasCremains: hasArea('cremains'),
+    hasBelongings: hasArea('belongings'),
+  };
+}
+
+type CaseEvidence = ReturnType<typeof caseEvidence>;
+
+function autoStepDone(stepId: string, evidence: CaseEvidence): boolean {
+  switch (stepId) {
+    case 'first-call':
+      return evidence.exists; // a case only exists because someone called
+    case 'first-meeting':
+      return evidence.hasArrangement || evidence.serviceScheduled || evidence.hasLocation || evidence.hasSelection || evidence.dispositionDone;
+    case 'pickup':
+      return evidence.bodyInCustody || evidence.serviceScheduled || evidence.dispositionDone;
+    case 'selection':
+      return evidence.hasSelection || evidence.serviceScheduled;
+    case 'media-program':
+      return evidence.hasMedia;
+    case 'death-cert':
+      return evidence.dcFiled;
+    case 'disposition':
+      return evidence.dispositionDone;
+    case 'closeout':
+      return (
+        evidence.dcFiled &&
+        evidence.dispositionDone &&
+        (evidence.cremainsBack || !evidence.hasCremains) &&
+        (evidence.belongingsReleased || !evidence.hasBelongings)
+      );
+    default:
+      return false;
+  }
+}
+
+type EffectiveStepState = {
+  step: WorkflowStepDefinition;
+  item: DashboardItem | null;
+  auto: boolean;
+  overridden: boolean;
+  done: boolean;
+  gap: boolean;
+  summary: string;
+};
+
+function effectiveWorkflowStates(
+  record: CaseRecord,
+  statusOverrides: Record<string, StatusOverride>,
+  workflowOverrides: WorkflowOverrideMap,
+): EffectiveStepState[] {
+  const evidence = caseEvidence(record, statusOverrides);
+  const caseOverrides = workflowOverrides[record.key] ?? {};
+
+  const base = familyWorkflow.map((step) => {
+    const item = workflowItemsFor(record, step)[0] ?? null;
+    const override = caseOverrides[step.id];
+    const auto = autoStepDone(step.id, evidence) || (item ? isWorkflowDone(item, statusOverrides[item.id]) : false);
+    const done = override ? override.state === 'done' : auto;
+    return {
+      step,
+      item,
+      auto,
+      overridden: Boolean(override),
+      done,
+      summary: workflowSummary(item, step, item ? statusOverrides[item.id] : undefined),
+    };
+  });
+
+  // Gap flag: an earlier step not done while a LATER step is done — a likely missed step.
+  const lastDoneIdx = base.reduce((max, state, index) => (state.done ? index : max), -1);
+  return base.map((state, index) => ({ ...state, gap: !state.done && index < lastDoneIdx }));
+}
+
 function WorkflowGlyph({ stepId }: { stepId: string }) {
   const common = { fill: 'none', stroke: 'currentColor', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, strokeWidth: 2 };
   const paths: Record<string, ReactNode> = {
@@ -812,50 +927,180 @@ function WorkflowGlyph({ stepId }: { stepId: string }) {
   );
 }
 
+type ToggleStep = (
+  record: CaseRecord,
+  step: WorkflowStepDefinition,
+  state: 'done' | 'pending' | 'auto',
+  initials: string,
+) => Promise<void>;
+
+function rememberedInitials() {
+  if (typeof window === 'undefined') return '';
+  return window.localStorage.getItem('ggfc_staff_initials') ?? '';
+}
+
+function WorkflowStepButton({
+  record,
+  state,
+  onToggleStep,
+  onOpenDetails,
+}: {
+  record: CaseRecord;
+  state: EffectiveStepState;
+  onToggleStep: ToggleStep;
+  onOpenDetails: () => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [initials, setInitials] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  function openMenu() {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 240)) });
+    setInitials(rememberedInitials());
+    setError('');
+    setOpen(true);
+  }
+
+  async function apply(next: 'done' | 'pending' | 'auto') {
+    const clean = initials.trim().toUpperCase();
+    if (next !== 'auto' && !clean) {
+      setError('Initials required');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      if (clean && typeof window !== 'undefined') window.localStorage.setItem('ggfc_staff_initials', clean);
+      await onToggleStep(record, state.step, next, clean);
+      setOpen(false);
+    } catch (err: any) {
+      setError(err?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tone = state.gap
+    ? 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100'
+    : state.done
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+      : state.item || state.auto
+        ? 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100'
+        : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100';
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={openMenu}
+        title={`${state.step.label}: ${state.summary}${state.overridden ? ' (set by staff)' : ' (auto)'}`}
+        aria-label={`${state.step.label} ${state.done ? 'done' : state.gap ? 'gap' : 'needed'} for ${record.name}. Click to set.`}
+        className={`inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition ${tone}`}
+      >
+        <span
+          className={`flex h-3.5 w-3.5 items-center justify-center rounded border text-[9px] ${
+            state.done
+              ? 'border-emerald-600 bg-emerald-600 text-white'
+              : state.gap
+                ? 'border-red-500 bg-red-500 text-white'
+                : 'border-current bg-white/70 text-transparent'
+          }`}
+        >
+          {state.gap && !state.done ? '!' : '✓'}
+        </span>
+        <WorkflowGlyph stepId={state.step.id} />
+        <span className="hidden 2xl:inline">{state.step.shortLabel}</span>
+        {state.overridden ? <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div
+            role="dialog"
+            aria-label={`${state.step.label} status`}
+            className="fixed z-50 w-56 rounded-lg border border-neutral-200 bg-white p-2 text-xs shadow-xl"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            <div className="px-1 pb-0.5 font-bold text-neutral-900">{state.step.label}</div>
+            <div className="px-1 pb-2 text-[11px] text-neutral-500">
+              {state.summary}
+              {!state.overridden ? ` · auto: ${state.auto ? 'done' : 'pending'}` : ' · set by staff'}
+            </div>
+            <input
+              value={initials}
+              onChange={(event) => setInitials(event.target.value)}
+              placeholder="Your initials"
+              maxLength={5}
+              className="mb-2 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm uppercase outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+            />
+            <div className="grid grid-cols-3 gap-1">
+              <button type="button" disabled={busy} onClick={() => apply('done')} className="h-8 rounded-md bg-emerald-600 px-1 font-semibold text-white disabled:opacity-60">Done</button>
+              <button type="button" disabled={busy} onClick={() => apply('pending')} className="h-8 rounded-md bg-amber-500 px-1 font-semibold text-white disabled:opacity-60">Not done</button>
+              <button type="button" disabled={busy} onClick={() => apply('auto')} className="h-8 rounded-md bg-neutral-200 px-1 font-semibold text-neutral-700 disabled:opacity-60">Auto</button>
+            </div>
+            {error ? <div className="mt-1 px-1 text-red-700">{error}</div> : null}
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onOpenDetails();
+              }}
+              className="mt-2 w-full rounded-md px-1 py-1 text-left text-[11px] font-semibold text-neutral-500 hover:bg-neutral-100"
+            >
+              Open case details →
+            </button>
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function WorkflowProgressCell({
   record,
   statusOverrides,
+  workflowOverrides,
+  onToggleStep,
   onOpenDetails,
 }: {
   record: CaseRecord;
   statusOverrides: Record<string, StatusOverride>;
+  workflowOverrides: WorkflowOverrideMap;
+  onToggleStep: ToggleStep;
   onOpenDetails: () => void;
 }) {
-  const states = workflowStepStates(record, statusOverrides);
+  const states = effectiveWorkflowStates(record, statusOverrides, workflowOverrides);
   const doneCount = states.filter((state) => state.done).length;
-  const needed = states.filter((state) => !state.done);
+  const firstGap = states.find((state) => state.gap);
+  const nextNeeded = states.find((state) => !state.done && !state.gap) ?? states.find((state) => !state.done);
 
   return (
     <div className="px-2 py-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
         {states.map((state) => (
-          <button
+          <WorkflowStepButton
             key={state.step.id}
-            type="button"
-            onClick={onOpenDetails}
-            title={`${state.step.label}: ${state.summary}`}
-            aria-label={`${state.step.label} ${state.done ? 'done' : 'needed'} for ${record.name}`}
-            className={`inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition ${
-              state.done
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                : state.item
-                  ? 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                  : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100'
-            }`}
-          >
-            <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${
-              state.done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-current bg-white/70 text-transparent'
-            }`}>
-              ✓
-            </span>
-            <WorkflowGlyph stepId={state.step.id} />
-            <span className="hidden 2xl:inline">{state.step.shortLabel}</span>
-          </button>
+            record={record}
+            state={state}
+            onToggleStep={onToggleStep}
+            onOpenDetails={onOpenDetails}
+          />
         ))}
       </div>
       <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-neutral-500">
         <span className="shrink-0">{doneCount}/{states.length} done</span>
-        {needed[0] ? <span className="min-w-0 truncate">next: {needed[0].step.shortLabel}</span> : null}
+        {firstGap ? (
+          <span className="min-w-0 truncate text-red-600">gap: {firstGap.step.shortLabel}</span>
+        ) : nextNeeded ? (
+          <span className="min-w-0 truncate">next: {nextNeeded.step.shortLabel}</span>
+        ) : (
+          <span className="shrink-0 text-emerald-600">complete</span>
+        )}
         <span className="ml-auto shrink-0 text-neutral-400">{record.updatedAt}</span>
       </div>
     </div>
@@ -1225,15 +1470,21 @@ function PrioritySelect({
 function WorkflowChecklist({
   record,
   statusOverrides,
+  workflowOverrides,
   onCommit,
   onUpdate,
+  onToggleStep,
 }: {
   record: CaseRecord;
   statusOverrides: Record<string, StatusOverride>;
+  workflowOverrides: WorkflowOverrideMap;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
+  onToggleStep: ToggleStep;
 }) {
   const [openStep, setOpenStep] = useState<string | null>(null);
+  const effectiveStates = effectiveWorkflowStates(record, statusOverrides, workflowOverrides);
+  const stateById = new Map(effectiveStates.map((state) => [state.step.id, state]));
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white">
@@ -1244,7 +1495,10 @@ function WorkflowChecklist({
         {familyWorkflow.map((step) => {
           const relatedItems = workflowItemsFor(record, step);
           const primary = relatedItems[0] ?? null;
-          const done = primary ? isWorkflowDone(primary, statusOverrides[primary.id]) : false;
+          const stepState = stateById.get(step.id);
+          const done = stepState?.done ?? false;
+          const gap = stepState?.gap ?? false;
+          const overridden = stepState?.overridden ?? false;
           const open = openStep === step.id;
           const summary = workflowSummary(primary, step, primary ? statusOverrides[primary.id] : undefined);
           const facts = primary ? workflowFacts(primary, step) : [];
@@ -1254,7 +1508,7 @@ function WorkflowChecklist({
             <div
               key={step.id}
               className={`relative mb-2 break-inside-avoid rounded-lg border transition focus-within:z-10 focus-within:shadow-lg ${
-                done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
+                gap ? 'border-red-300 bg-red-50/50' : done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
               }`}
             >
               <button
@@ -1264,21 +1518,31 @@ function WorkflowChecklist({
                 aria-expanded={open}
               >
                 <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs font-black ${
-                  done ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-neutral-300 bg-white text-transparent'
+                  done
+                    ? 'border-emerald-600 bg-emerald-600 text-white'
+                    : gap
+                      ? 'border-red-500 bg-red-500 text-white'
+                      : 'border-neutral-300 bg-white text-transparent'
                 }`}>
-                  ✓
+                  {gap && !done ? '!' : '✓'}
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-bold text-neutral-950">{step.label}</span>
-                  <span className="mt-0.5 block truncate text-xs text-neutral-600">{summary}</span>
+                  <span className="block text-sm font-bold text-neutral-950">{step.label}{overridden ? <span className="ml-1 text-[10px] font-semibold text-neutral-400">(staff)</span> : null}</span>
+                  <span className="mt-0.5 block truncate text-xs text-neutral-600">{gap ? 'Gap — a later step is done but this one isn’t' : summary}</span>
                 </span>
               </button>
 
               <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl`}>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Step</span>
+                    <button type="button" onClick={() => onToggleStep(record, step, 'done', rememberedInitials())} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
+                    <button type="button" onClick={() => onToggleStep(record, step, 'pending', rememberedInitials())} className="h-7 rounded-md bg-amber-500 px-2 text-[11px] font-semibold text-white">Not done</button>
+                    <button type="button" onClick={() => onToggleStep(record, step, 'auto', rememberedInitials())} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700">Auto</button>
+                  </div>
                   {primary ? (
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Update</span>
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Linked status</span>
                         <StatusChip item={primary} override={statusOverrides[primary.id]} onCommit={onCommit} />
                       </div>
                       {facts.length ? (
@@ -1369,19 +1633,23 @@ function MenuCell({
 function DetailDrawer({
   record,
   statusOverrides,
+  workflowOverrides,
   auditEntries,
   detailLoading,
   onClose,
   onCommit,
   onUpdate,
+  onToggleStep,
 }: {
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
+  workflowOverrides: WorkflowOverrideMap;
   auditEntries: AuditEntry[];
   detailLoading: boolean;
   onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
+  onToggleStep: ToggleStep;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -1460,8 +1728,10 @@ function DetailDrawer({
             <WorkflowChecklist
               record={record}
               statusOverrides={statusOverrides}
+              workflowOverrides={workflowOverrides}
               onCommit={onCommit}
               onUpdate={onUpdate}
+              onToggleStep={onToggleStep}
             />
           </div>
 
@@ -1593,6 +1863,7 @@ export default function BoardPage() {
   const [items, setItems] = useState<DashboardItem[]>([]);
   const [feedMeta, setFeedMeta] = useState<FeedMeta | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
+  const [workflowOverrides, setWorkflowOverrides] = useState<WorkflowOverrideMap>({});
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
@@ -1734,6 +2005,26 @@ export default function BoardPage() {
       });
   }, [items]);
 
+  useEffect(() => {
+    // Durable per-family workflow checklist overrides (small, bounded by what staff set).
+    getWorkflowStates()
+      .then((response) => {
+        const next: WorkflowOverrideMap = {};
+        for (const row of response.data) {
+          if (row.state !== 'done' && row.state !== 'pending') continue;
+          (next[row.case_key] = next[row.case_key] ?? {})[row.step_id] = {
+            state: row.state,
+            initials: row.staff_initials,
+            updatedAt: row.updated_at,
+          };
+        }
+        setWorkflowOverrides(next);
+      })
+      .catch(() => {
+        setWorkflowOverrides({});
+      });
+  }, []);
+
   async function syncWeeklySheet() {
     setSheetSyncing(true);
     setSheetSyncMessage('');
@@ -1745,6 +2036,44 @@ export default function BoardPage() {
       setSheetSyncMessage(error.message || 'Master sheet sync failed.');
     } finally {
       setSheetSyncing(false);
+    }
+  }
+
+  async function commitWorkflowStep(
+    record: CaseRecord,
+    step: WorkflowStepDefinition,
+    state: 'done' | 'pending' | 'auto',
+    initials: string,
+  ) {
+    const saved = await saveWorkflowState({
+      case_key: record.key,
+      case_name: record.name,
+      step_id: step.id,
+      state,
+      staff_initials: initials,
+    });
+    setWorkflowOverrides((current) => {
+      const next = { ...current };
+      const caseMap = { ...(next[record.key] ?? {}) };
+      if (state === 'auto') {
+        delete caseMap[step.id];
+      } else {
+        caseMap[step.id] = { state, initials, updatedAt: saved.data?.updated_at ?? new Date().toISOString() };
+      }
+      next[record.key] = caseMap;
+      return next;
+    });
+    if (saved.audit) {
+      const entry: AuditEntry = {
+        kind: 'status',
+        itemId: `${record.key}:${step.id}`,
+        label: `${record.name} — ${step.label}`,
+        from: saved.audit.old_state ?? 'auto',
+        to: saved.audit.new_state,
+        initials: saved.audit.staff_initials,
+        changedAt: saved.audit.created_at,
+      };
+      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
     }
   }
 
@@ -1962,6 +2291,8 @@ export default function BoardPage() {
                 <WorkflowProgressCell
                   record={record}
                   statusOverrides={statusOverrides}
+                  workflowOverrides={workflowOverrides}
+                  onToggleStep={commitWorkflowStep}
                   onOpenDetails={() => setSelectedKey(record.key)}
                 />
                 <div className="px-2 py-2 text-xs leading-5 text-neutral-700">
@@ -1981,11 +2312,13 @@ export default function BoardPage() {
       <DetailDrawer
         record={selectedRecord}
         statusOverrides={statusOverrides}
+        workflowOverrides={workflowOverrides}
         auditEntries={auditEntries}
         detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
         onCommit={commitStatus}
         onUpdate={updateItemField}
+        onToggleStep={commitWorkflowStep}
       />
 
       {syncState === 'unavailable' ? (

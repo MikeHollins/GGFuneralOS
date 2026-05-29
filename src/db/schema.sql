@@ -342,6 +342,30 @@ CREATE INDEX idx_operational_items_area ON operational_items(area, is_archived);
 CREATE INDEX idx_operational_items_source_origin ON operational_items(source_origin, is_archived);
 CREATE INDEX idx_operational_items_source_ref ON operational_items(source_origin, source_ref) WHERE is_archived = false;
 
+-- Durable per-family workflow checklist override (absence of a row = auto-derived).
+CREATE TABLE case_workflow_state (
+  case_key       TEXT NOT NULL,
+  step_id        TEXT NOT NULL,
+  state          TEXT NOT NULL,
+  staff_initials TEXT NOT NULL DEFAULT '',
+  note           TEXT NOT NULL DEFAULT '',
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (case_key, step_id)
+);
+
+CREATE TABLE case_workflow_audit (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_key       TEXT NOT NULL,
+  case_name      TEXT NOT NULL DEFAULT '',
+  step_id        TEXT NOT NULL,
+  old_state      TEXT,
+  new_state      TEXT NOT NULL,
+  staff_initials TEXT NOT NULL DEFAULT '',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_case_workflow_audit_created ON case_workflow_audit(created_at DESC);
+
 CREATE TABLE operational_item_audit (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   item_id        TEXT NOT NULL,

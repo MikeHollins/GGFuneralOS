@@ -60,6 +60,22 @@ export const updateOperationItem = (itemId: string, field: string, value: string
     { method: 'PATCH', body: JSON.stringify({ field, value }) }
   );
 
+export const getWorkflowStates = () =>
+  apiFetch<{ data: CaseWorkflowState[]; audit: CaseWorkflowAudit[] }>('/dashboard/workflow-state');
+
+export const saveWorkflowState = (data: {
+  case_key: string;
+  case_name: string;
+  step_id: string;
+  state: 'done' | 'pending' | 'auto';
+  staff_initials: string;
+  note?: string;
+}) =>
+  apiFetch<{ data: CaseWorkflowState | null; audit: CaseWorkflowAudit | null; changed: boolean }>(
+    '/dashboard/workflow-state',
+    { method: 'POST', body: JSON.stringify(data) },
+  );
+
 export const syncWeeklyServiceSchedule = () =>
   apiFetch<{ data: { imported: number; source: string } }>(
     '/dashboard/sync/weekly-service',
@@ -264,5 +280,26 @@ export interface OperationalItemAudit {
   new_value: string | null;
   staff_id: string | null;
   staff_name: string;
+  created_at: string;
+}
+
+
+export interface CaseWorkflowState {
+  case_key: string;
+  step_id: string;
+  state: 'done' | 'pending';
+  staff_initials: string;
+  note: string;
+  updated_at: string;
+}
+
+export interface CaseWorkflowAudit {
+  id: string;
+  case_key: string;
+  case_name: string;
+  step_id: string;
+  old_state: string | null;
+  new_state: string;
+  staff_initials: string;
   created_at: string;
 }
