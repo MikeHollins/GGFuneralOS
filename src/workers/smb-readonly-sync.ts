@@ -312,6 +312,8 @@ async function upsertOperationalItems(rows: SourceFileRow[], root: string, inclu
         case_match_basis: 'server filename',
       },
       source_content_hash: hashId(JSON.stringify(row)),
+      // Recency anchor for the feed ordering — the file's last-modified date.
+      business_date: row.modified_at ? row.modified_at.slice(0, 10) : null,
     };
   });
 
@@ -334,15 +336,16 @@ async function upsertOperationalItems(rows: SourceFileRow[], root: string, inclu
            options jsonb,
            source_ref text,
            source_payload jsonb,
-           source_content_hash text
+           source_content_hash text,
+           business_date date
          )
        )
        INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, updated_at)
+          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, business_date, updated_at)
        SELECT
          item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-         'smb', source_ref, source_payload, now(), source_content_hash, now()
+         'smb', source_ref, source_payload, now(), source_content_hash, business_date, now()
        FROM incoming
        ON CONFLICT (item_id) DO UPDATE SET
          area = EXCLUDED.area,
@@ -359,6 +362,7 @@ async function upsertOperationalItems(rows: SourceFileRow[], root: string, inclu
          source_payload = EXCLUDED.source_payload,
          source_seen_at = now(),
          source_content_hash = EXCLUDED.source_content_hash,
+         business_date = EXCLUDED.business_date,
          is_archived = false,
          updated_at = now()`,
       [JSON.stringify(chunk)],

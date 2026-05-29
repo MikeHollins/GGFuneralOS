@@ -939,6 +939,17 @@ function rememberedInitials() {
   return window.localStorage.getItem('ggfc_staff_initials') ?? '';
 }
 
+// Return the staff initials, prompting once if none are remembered. Returns '' if the user
+// cancels — callers must not record a change without initials (audit-trail requirement).
+function promptInitials() {
+  let initials = rememberedInitials();
+  if (!initials && typeof window !== 'undefined') {
+    initials = (window.prompt('Enter your initials to record this change') ?? '').trim().toUpperCase().slice(0, 5);
+    if (initials) window.localStorage.setItem('ggfc_staff_initials', initials);
+  }
+  return initials;
+}
+
 function WorkflowStepButton({
   record,
   state,
@@ -1063,18 +1074,15 @@ function WorkflowStepButton({
 
 function WorkflowProgressCell({
   record,
-  statusOverrides,
-  workflowOverrides,
+  states,
   onToggleStep,
   onOpenDetails,
 }: {
   record: CaseRecord;
-  statusOverrides: Record<string, StatusOverride>;
-  workflowOverrides: WorkflowOverrideMap;
+  states: EffectiveStepState[];
   onToggleStep: ToggleStep;
   onOpenDetails: () => void;
 }) {
-  const states = effectiveWorkflowStates(record, statusOverrides, workflowOverrides);
   const doneCount = states.filter((state) => state.done).length;
   const firstGap = states.find((state) => state.gap);
   const nextNeeded = states.find((state) => !state.done && !state.gap) ?? states.find((state) => !state.done);
@@ -1535,8 +1543,8 @@ function WorkflowChecklist({
               <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl`}>
                   <div className="flex items-center gap-1">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Step</span>
-                    <button type="button" onClick={() => onToggleStep(record, step, 'done', rememberedInitials())} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
-                    <button type="button" onClick={() => onToggleStep(record, step, 'pending', rememberedInitials())} className="h-7 rounded-md bg-amber-500 px-2 text-[11px] font-semibold text-white">Not done</button>
+                    <button type="button" onClick={() => { const initials = promptInitials(); if (initials) onToggleStep(record, step, 'done', initials); }} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
+                    <button type="button" onClick={() => { const initials = promptInitials(); if (initials) onToggleStep(record, step, 'pending', initials); }} className="h-7 rounded-md bg-amber-500 px-2 text-[11px] font-semibold text-white">Not done</button>
                     <button type="button" onClick={() => onToggleStep(record, step, 'auto', rememberedInitials())} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700">Auto</button>
                   </div>
                   {primary ? (
@@ -2143,6 +2151,16 @@ export default function BoardPage() {
   }
 
   const caseRecords = useMemo(() => buildCases(items, auditEntries), [items, auditEntries]);
+  // Compute each case's workflow states ONCE per data change, not per render/keystroke —
+  // effectiveWorkflowStates scores every item against 8 steps, so recomputing it inside
+  // each row on every search keystroke would freeze the board. Consumers read this map.
+  const workflowStateByKey = useMemo(() => {
+    const map = new Map<string, EffectiveStepState[]>();
+    for (const record of caseRecords) {
+      map.set(record.key, effectiveWorkflowStates(record, statusOverrides, workflowOverrides));
+    }
+    return map;
+  }, [caseRecords, statusOverrides, workflowOverrides]);
   const matchingRecords = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return caseRecords
@@ -2290,8 +2308,7 @@ export default function BoardPage() {
                 <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
                 <WorkflowProgressCell
                   record={record}
-                  statusOverrides={statusOverrides}
-                  workflowOverrides={workflowOverrides}
+                  states={workflowStateByKey.get(record.key) ?? []}
                   onToggleStep={commitWorkflowStep}
                   onOpenDetails={() => setSelectedKey(record.key)}
                 />
