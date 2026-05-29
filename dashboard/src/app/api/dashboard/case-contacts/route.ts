@@ -11,13 +11,10 @@ function clean(value: unknown, max: number) {
 function auditSafe(value: string, kind: 'phone' | 'email' | 'text') {
   if (!value) return '';
   if (kind === 'phone') {
-    const digits = value.replace(/\D/g, '');
-    return digits.length >= 4 ? `phone ending ${digits.slice(-4)}` : 'phone on file';
+    return value;
   }
   if (kind === 'email') {
-    const [user, domain] = value.split('@');
-    if (!user || !domain) return 'email on file';
-    return `${user.slice(0, 1)}***@${domain}`;
+    return value;
   }
   return value;
 }

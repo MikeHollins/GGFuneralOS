@@ -10,7 +10,8 @@
     "db:push": "tsx src/db/push-schema.ts",
     "db:migrate": "tsx src/db/push-schema.ts && echo 'Running migration...' && tsx -e \"require('./src/db/client').sql(require('fs').readFileSync('src/db/migrations/001-upgrade-tables.sql','utf8'))\"",
     "db:seed": "tsx src/db/seed.ts",
-    "sync:smb": "tsx src/workers/smb-readonly-sync.ts"
+    "sync:smb": "tsx src/workers/smb-readonly-sync.ts",
+    "smoke:dashboard": "node scripts/smoke-dashboard.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

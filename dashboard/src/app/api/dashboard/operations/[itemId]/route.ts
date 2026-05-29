@@ -3,14 +3,11 @@ import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
 import { sanitizeSourcePayload } from '@/lib/operation-items';
 
-const editableFields = new Set(['label', 'detail', 'owner', 'due', 'priority', 'date_of_death']);
-const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'priority', 'date_of_death']);
+const editableFields = new Set(['label', 'detail', 'owner', 'due', 'date_of_death']);
+const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'date_of_death']);
 
 function cleanValue(field: string, value: unknown) {
   const text = String(value ?? '').trim();
-  if (field === 'priority' && !['critical', 'high', 'normal', 'done'].includes(text)) {
-    throw new Error('Invalid priority');
-  }
   if (field === 'label' && !text) throw new Error('Label is required');
   if (field === 'date_of_death') {
     if (!text) return ''; // clearing is allowed

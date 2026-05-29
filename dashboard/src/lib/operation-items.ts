@@ -60,14 +60,8 @@ export function maskSensitiveValue(key: string, value: string): string {
   if (lowerKey.includes('ssn') || lowerKey.includes('social_security')) {
     return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
   }
-  if (lowerKey.includes('phone') || lowerKey.includes('cell') || lowerKey.includes('telephone')) {
-    return digits.length >= 4 ? `ending ${digits.slice(-4)}` : 'masked';
-  }
   if (/^\D*\d{3}\D*\d{2}\D*\d{4}\D*$/.test(trimmed)) {
     return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
-  }
-  if (digits.length === 10 && /phone|cell|contact|number/.test(lowerKey)) {
-    return `ending ${digits.slice(-4)}`;
   }
   return trimmed;
 }
@@ -77,7 +71,8 @@ export function maskSensitiveValue(key: string, value: string): string {
 const NEVER_MASK_KEYS = new Set(['case_match_key', 'case_match_basis', '_row_number']);
 
 // Sanitize a raw source_payload before it leaves the server for an authenticated browser
-// client. The UI only ever needs masked values; raw spreadsheet PII must not cross the wire.
+// client. Staff dashboard users need raw operational contact fields, but SSNs must never
+// cross the wire in full.
 export function sanitizeSourcePayload(payload?: Record<string, string> | null): Record<string, string> {
   if (!payload || typeof payload !== 'object') return {};
   const out: Record<string, string> = {};
@@ -139,7 +134,7 @@ export const dashboardItems: DashboardItem[] = [
     id: 'dc-001',
     area: 'death-cert',
     label: 'Death certificate follow-up',
-    detail: 'Doctor contact needed before filing. Phone and medical details stay masked by default.',
+    detail: 'Doctor contact needed before filing. Phone and medical details are available to staff.',
     owner: 'Death Certificate',
     due: 'Due today',
     source: 'Death Certificate 2026',

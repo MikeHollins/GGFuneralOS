@@ -54,8 +54,8 @@ type StatusOverride = {
 
 type SourceHealth = OperationsFeed['sources'][number];
 type FeedMeta = NonNullable<OperationsFeed['meta']>;
-type ViewId = 'active' | 'today' | 'cases' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
-type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'priority' | 'date_of_death';
+type ViewId = 'active' | 'cases' | 'calendar' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
+type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'date_of_death';
 
 type MenuEntry = {
   label: string;
@@ -149,8 +149,8 @@ type WorkflowStepState = {
 
 const viewLabels: Record<ViewId, string> = {
   active: 'Active Cases',
-  today: 'Today',
   cases: 'All Cases',
+  calendar: 'Calendar',
   service: 'Service',
   arrangements: 'Arrangements',
   'death-certs': 'Death Certs',
@@ -160,10 +160,7 @@ const viewLabels: Record<ViewId, string> = {
 };
 
 // Primary navigation answers "which set of families do I look at?" — kept as buttons.
-const primaryViews: ViewId[] = ['active', 'today', 'cases'];
-// Category views are loose filters over the same table — collapsed into a compact menu.
-const categoryViews: ViewId[] = ['service', 'arrangements', 'death-certs', 'cremains', 'belongings', 'files'];
-
+const primaryViews: ViewId[] = ['active', 'cases', 'calendar'];
 const appTopLinks = [
   { href: '/staff', label: 'Staff/Admin', ready: true },
   { href: '/texts', label: 'Texts', ready: false },
@@ -256,8 +253,8 @@ const serviceLogisticsGroups: Array<{ label: string; keys: string[] }> = [
 
 const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
   active: null,
-  today: null,
   cases: null,
+  calendar: null,
   service: ['service'],
   arrangements: ['arrangement'],
   'death-certs': ['death-cert'],
@@ -410,22 +407,8 @@ function isPseudoCaseItem(item: DashboardItem) {
   return false;
 }
 
-function safeFieldValue(key: string, value: string) {
-  const lowerKey = key.toLowerCase();
-  const trimmed = value.trim();
-  const digits = trimmed.replace(/\D/g, '');
-
-  if (!trimmed) return '';
-  if (lowerKey.includes('ssn') || lowerKey.includes('social_security')) {
-    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
-  }
-  if (lowerKey.includes('phone') || lowerKey.includes('cell') || lowerKey.includes('telephone')) {
-    return digits.length >= 4 ? `ending ${digits.slice(-4)}` : 'masked';
-  }
-  if (/^\D*\d{3}\D*\d{2}\D*\d{4}\D*$/.test(trimmed)) {
-    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
-  }
-  return trimmed;
+function safeFieldValue(_key: string, value: string) {
+  return value.trim();
 }
 
 function displayKey(key: string) {
@@ -452,13 +435,6 @@ function statusTone(status: string) {
     return 'border-emerald-200 bg-emerald-50 text-emerald-800';
   }
   return 'border-neutral-200 bg-neutral-50 text-neutral-800';
-}
-
-function priorityRank(item: DashboardItem) {
-  if (item.priority === 'critical') return 4;
-  if (item.priority === 'high') return 3;
-  if (item.priority === 'normal') return 2;
-  return 1;
 }
 
 function sourceRowLabel(item: DashboardItem) {
@@ -546,7 +522,7 @@ function recordHasTodayWork(record: CaseRecord, statusOverrides: Record<string, 
 
   return workflowStepStates(record, statusOverrides).some((state) => {
     if (state.done || !state.item) return false;
-    return state.item.priority === 'critical' || state.item.status.toLowerCase().includes('needed') || state.item.status.toLowerCase().includes('missing');
+    return state.item.status.toLowerCase().includes('needed') || state.item.status.toLowerCase().includes('missing');
   });
 }
 
@@ -901,13 +877,14 @@ function milestoneSearchText(record: CaseRecord, overrides: MilestoneOverrideMap
 }
 
 function milestoneCellTone(state: MilestoneState) {
-  if (state.state === 'empty') return 'border-amber-200 bg-amber-50 text-amber-900';
+  if (state.state === 'empty') return 'border-neutral-200 bg-neutral-50 text-neutral-400';
   if (state.state === 'na') return 'border-neutral-200 bg-neutral-50 text-neutral-500';
   if (state.overridden) return 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950';
   return 'border-emerald-200 bg-emerald-50 text-emerald-800';
 }
 
-// Compact grid display: every expected milestone slot is visible, with source/staff/N/A/pending state.
+// Compact grid display: populated milestones are visible at a glance; truly empty slots
+// show a quiet ellipsis instead of repeating "Pending" through the board.
 function MilestoneChips({
   record,
   defs,
@@ -936,7 +913,7 @@ function MilestoneChips({
         >
           <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{state.def.label}</div>
           <div className={`truncate ${state.state === 'empty' || state.state === 'na' ? 'italic' : ''}`}>
-            {state.state === 'empty' ? 'Pending' : state.state === 'na' ? 'N/A' : state.value}
+            {state.state === 'empty' ? '...' : state.state === 'na' ? 'N/A' : state.value}
           </div>
         </div>
       ))}
@@ -1279,6 +1256,99 @@ function MediaProgramMatches({ record }: { record: CaseRecord }) {
   );
 }
 
+function SourceAtGlance({
+  record,
+  sources,
+  sheetSyncing,
+  sheetSyncMessage,
+  onSync,
+}: {
+  record: CaseRecord;
+  sources: SourceHealth[];
+  sheetSyncing: boolean;
+  sheetSyncMessage: string;
+  onSync: () => void;
+}) {
+  const groups = [
+    { title: 'Dates & times', entries: record.dateEntries },
+    { title: 'Locations', entries: record.locationEntries },
+    { title: 'Service staff', entries: record.serviceStaffEntries },
+    { title: 'Service logistics', entries: record.serviceLogisticsEntries },
+  ];
+  const sourceFacts = record.items.flatMap((item) =>
+    collectTextEntries(item).slice(0, 12).map(([key, value]) => ({
+      id: `${item.id}:${key}`,
+      key: displayKey(key),
+      value,
+      source: item.source,
+    })),
+  ).slice(0, 80);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="border-b border-neutral-200 bg-white px-3 py-2">
+        <h3 className="text-sm font-black text-neutral-950">Master sheet at a glance</h3>
+        <div className="text-[11px] text-neutral-500">Read-only source values surfaced for staff.</div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+        {groups.map((group) => (
+          <div key={group.title} className="rounded-md border border-neutral-200 bg-white p-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">{group.title}</div>
+            <div className="mt-1 space-y-1">
+              {group.entries.length ? group.entries.slice(0, 6).map((entry, index) => (
+                <div key={`${group.title}-${entry.label}-${index}`} className="text-[11px] leading-tight">
+                  <span className="font-bold text-neutral-600">{entry.label}: </span>
+                  <span className="text-neutral-950">{entry.value}</span>
+                </div>
+              )) : <div className="text-[11px] italic text-neutral-400">...</div>}
+            </div>
+          </div>
+        ))}
+
+        <details className="rounded-md border border-neutral-200 bg-white">
+          <summary className="flex cursor-pointer list-none items-center justify-between px-2 py-1.5 text-[11px] font-bold text-neutral-600 hover:bg-neutral-50">
+            Source rows
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px]">{record.items.length}</span>
+          </summary>
+          <div className="max-h-80 overflow-y-auto border-t border-neutral-100 p-2">
+            <div className="space-y-1">
+              {sourceFacts.length ? sourceFacts.map((fact) => (
+                <div key={fact.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] leading-tight">
+                  <div><span className="font-bold text-neutral-500">{fact.key}: </span><span className="text-neutral-900">{fact.value}</span></div>
+                  <div className="mt-0.5 text-[10px] text-neutral-400">{fact.source}</div>
+                </div>
+              )) : <div className="text-[11px] italic text-neutral-400">No source fields found.</div>}
+            </div>
+          </div>
+        </details>
+
+        <details className="rounded-md border border-neutral-200 bg-white">
+          <summary className="cursor-pointer list-none px-2 py-1.5 text-[11px] font-bold text-neutral-500 hover:bg-neutral-50">
+            Sources
+          </summary>
+          <div className="space-y-1 border-t border-neutral-100 p-2">
+            {sources.map((source) => (
+              <div key={source.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] leading-tight">
+                <span className="font-bold text-neutral-700">{source.label}: </span>
+                <span>{source.status}</span>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={onSync}
+              disabled={sheetSyncing}
+              className="mt-1 h-7 rounded-md bg-black px-2 text-[11px] font-bold text-[#efb70c] disabled:opacity-60"
+            >
+              {sheetSyncing ? 'Syncing' : 'Sync master sheet'}
+            </button>
+            {sheetSyncMessage ? <div className="text-[11px] text-neutral-500">{sheetSyncMessage}</div> : null}
+          </div>
+        </details>
+      </div>
+    </div>
+  );
+}
+
 function blockerFor(items: DashboardItem[]) {
   const blockingWords = ['hold', 'missing', 'needed', 'tbd', 'pending', 'waiting', 'incomplete'];
   for (const item of items) {
@@ -1337,7 +1407,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
   }
 
   return Array.from(groups.entries()).map(([key, groupedItems]) => {
-    const sortedItems = [...groupedItems].sort((a, b) => priorityRank(b) - priorityRank(a));
+    const sortedItems = [...groupedItems];
     const primaryItem = sortedItems[0];
     const statusItem = sortedItems.find((item) => item.area !== 'paperwork' && !item.source.startsWith('SMB:')) ?? primaryItem;
     const dateEntries = dedupeMenuEntries(sortedItems.flatMap((item) => collectGroupedEntries(item, dateGroups)));
@@ -1406,8 +1476,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
 
 function recordMatchesView(record: CaseRecord, view: ViewId, statusOverrides: Record<string, StatusOverride>) {
   if (view === 'active') return recordIsActive(record);
-  if (view === 'today') return recordHasTodayWork(record, statusOverrides);
   if (view === 'cases') return true;
+  if (view === 'calendar') return true;
   const filters = viewAreaFilters[view];
   if (!filters) return true;
   return record.items.some((item) => filters.includes(item.area) || (filters.includes('smb') && item.source.startsWith('SMB:')));
@@ -1453,7 +1523,7 @@ function workflowItemsFor(record: CaseRecord, step: WorkflowStepDefinition) {
   });
   return scored
     .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score || priorityRank(b.item) - priorityRank(a.item))
+    .sort((a, b) => b.score - a.score || a.item.source.localeCompare(b.item.source) || a.item.label.localeCompare(b.item.label))
     .map(({ item }) => item);
 }
 
@@ -1827,6 +1897,244 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+type CalendarMode = 'day' | 'week' | 'month' | 'year';
+type CaseCalendarEvent = {
+  id: string;
+  caseKey: string;
+  caseName: string;
+  label: string;
+  date: Date;
+  dateLabel: string;
+  location: string;
+  source: string;
+};
+
+function calendarRange(mode: CalendarMode, focusDate: Date) {
+  const start = new Date(focusDate);
+  start.setHours(0, 0, 0, 0);
+  if (mode === 'day') {
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+  if (mode === 'week') {
+    start.setDate(start.getDate() - start.getDay());
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+  if (mode === 'month') {
+    start.setDate(1);
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59, 999);
+    return { start, end };
+  }
+  start.setMonth(0, 1);
+  const end = new Date(start.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return { start, end };
+}
+
+function shiftCalendarDate(date: Date, mode: CalendarMode, amount: number) {
+  const next = new Date(date);
+  if (mode === 'day') next.setDate(next.getDate() + amount);
+  else if (mode === 'week') next.setDate(next.getDate() + amount * 7);
+  else if (mode === 'month') next.setMonth(next.getMonth() + amount);
+  else next.setFullYear(next.getFullYear() + amount);
+  return next;
+}
+
+function calendarTitle(mode: CalendarMode, focusDate: Date) {
+  const { start, end } = calendarRange(mode, focusDate);
+  if (mode === 'day') return start.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  if (mode === 'week') {
+    return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  }
+  if (mode === 'month') return start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  return String(start.getFullYear());
+}
+
+function calendarDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function calendarEventsFor(records: CaseRecord[], overrides: MilestoneOverrideMap): CaseCalendarEvent[] {
+  const locationByDateKey: Record<string, string> = {
+    service: 'service_location',
+    cremation: 'cremation_location',
+    burial: 'burial_location',
+  };
+
+  const events: CaseCalendarEvent[] = [];
+  for (const record of records) {
+    for (const def of DATE_MILESTONES) {
+      const state = effectiveMilestone(record, def, overrides);
+      if (state.state !== 'source' && state.state !== 'set') continue;
+      const date = parseOperationalDate(state.value);
+      if (!date) continue;
+      const locationDef = ALL_MILESTONES.find((milestone) => milestone.key === locationByDateKey[def.key]);
+      const locationState = locationDef ? effectiveMilestone(record, locationDef, overrides) : null;
+      const location = locationState && (locationState.state === 'source' || locationState.state === 'set') ? locationState.value : '';
+      events.push({
+        id: `${record.key}:${def.key}:${calendarDateKey(date)}`,
+        caseKey: record.key,
+        caseName: record.name,
+        label: def.full,
+        date,
+        dateLabel: state.value,
+        location,
+        source: state.overridden ? 'Staff' : 'Source',
+      });
+    }
+  }
+  return events.sort((a, b) => a.date.getTime() - b.date.getTime() || a.caseName.localeCompare(b.caseName));
+}
+
+function CalendarEventPill({ event, onOpen }: { event: CaseCalendarEvent; onOpen: (caseKey: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(event.caseKey)}
+      className="block w-full rounded-md border border-neutral-200 bg-white px-2 py-1 text-left text-[11px] leading-tight shadow-sm transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
+      title={`${event.label}: ${event.caseName}${event.location ? `, ${event.location}` : ''}`}
+    >
+      <span className="block truncate font-bold text-neutral-950">{event.caseName}</span>
+      <span className="block truncate text-neutral-600">{event.label}{event.location ? ` · ${event.location}` : ''}</span>
+    </button>
+  );
+}
+
+function CalendarBoard({
+  records,
+  milestoneOverrides,
+  onOpenCase,
+}: {
+  records: CaseRecord[];
+  milestoneOverrides: MilestoneOverrideMap;
+  onOpenCase: (caseKey: string) => void;
+}) {
+  const [mode, setMode] = useState<CalendarMode>('week');
+  const [focusDate, setFocusDate] = useState(() => new Date());
+  const events = useMemo(() => calendarEventsFor(records, milestoneOverrides), [records, milestoneOverrides]);
+  const { start, end } = calendarRange(mode, focusDate);
+  const visibleEvents = events.filter((event) => event.date >= start && event.date <= end);
+  const eventsByDay = new Map<string, CaseCalendarEvent[]>();
+  for (const event of visibleEvents) {
+    const key = calendarDateKey(event.date);
+    eventsByDay.set(key, [...(eventsByDay.get(key) ?? []), event]);
+  }
+
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(calendarRange('week', focusDate).start);
+    day.setDate(day.getDate() + index);
+    return day;
+  });
+  const monthStart = calendarRange('month', focusDate).start;
+  const firstMonthCell = new Date(monthStart);
+  firstMonthCell.setDate(1 - firstMonthCell.getDay());
+  const monthDays = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(firstMonthCell);
+    day.setDate(firstMonthCell.getDate() + index);
+    return day;
+  });
+  const yearMonths = Array.from({ length: 12 }, (_, index) => new Date(focusDate.getFullYear(), index, 1));
+
+  return (
+    <section className="rounded-lg border border-neutral-200 bg-white">
+      <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 px-3 py-2">
+        <h2 className="mr-auto text-sm font-black text-neutral-950">Calendar</h2>
+        <div className="flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5">
+          {(['day', 'week', 'month', 'year'] as CalendarMode[]).map((nextMode) => (
+            <button
+              key={nextMode}
+              type="button"
+              onClick={() => setMode(nextMode)}
+              className={`h-7 rounded px-2 text-[11px] font-bold capitalize ${mode === nextMode ? 'bg-black text-[#efb70c]' : 'text-neutral-600 hover:bg-white'}`}
+            >
+              {nextMode}
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, -1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Prev</button>
+        <button type="button" onClick={() => setFocusDate(new Date())} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Current</button>
+        <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, 1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Next</button>
+      </div>
+
+      <div className="px-3 py-2 text-sm font-bold text-neutral-800">{calendarTitle(mode, focusDate)}</div>
+
+      {mode === 'day' ? (
+        <div className="space-y-2 px-3 pb-3">
+          {(eventsByDay.get(calendarDateKey(start)) ?? []).map((event) => <CalendarEventPill key={event.id} event={event} onOpen={onOpenCase} />)}
+          {visibleEvents.length ? null : <div className="rounded-md bg-neutral-50 px-3 py-6 text-center text-sm italic text-neutral-400">No dated case milestones found for this day.</div>}
+        </div>
+      ) : null}
+
+      {mode === 'week' ? (
+        <div className="grid gap-px bg-neutral-200 md:grid-cols-7">
+          {weekDays.map((day) => {
+            const key = calendarDateKey(day);
+            return (
+              <div key={key} className="min-h-[360px] bg-white p-2">
+                <div className="mb-2 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500">
+                  {day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </div>
+                <div className="space-y-1.5">
+                  {(eventsByDay.get(key) ?? []).map((event) => <CalendarEventPill key={event.id} event={event} onOpen={onOpenCase} />)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {mode === 'month' ? (
+        <div className="grid grid-cols-7 gap-px bg-neutral-200">
+          {monthDays.map((day) => {
+            const key = calendarDateKey(day);
+            const dayEvents = eventsByDay.get(key) ?? [];
+            const inMonth = day.getMonth() === focusDate.getMonth();
+            return (
+              <div key={key} className={`min-h-28 bg-white p-1.5 ${inMonth ? '' : 'opacity-40'}`}>
+                <div className="mb-1 text-[11px] font-bold text-neutral-500">{day.getDate()}</div>
+                <div className="space-y-1">
+                  {dayEvents.slice(0, 3).map((event) => <CalendarEventPill key={event.id} event={event} onOpen={onOpenCase} />)}
+                  {dayEvents.length > 3 ? <div className="text-[10px] font-semibold text-neutral-400">+{dayEvents.length - 3} more</div> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {mode === 'year' ? (
+        <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-4">
+          {yearMonths.map((month) => {
+            const monthEvents = events.filter((event) => event.date.getFullYear() === month.getFullYear() && event.date.getMonth() === month.getMonth());
+            return (
+              <button
+                key={month.toISOString()}
+                type="button"
+                onClick={() => {
+                  setFocusDate(month);
+                  setMode('month');
+                }}
+                className="min-h-28 rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-left transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
+              >
+                <div className="font-bold text-neutral-950">{month.toLocaleDateString('en-US', { month: 'long' })}</div>
+                <div className="mt-1 text-xs text-neutral-500">{monthEvents.length} dated milestones</div>
+                <div className="mt-2 space-y-1">
+                  {monthEvents.slice(0, 3).map((event) => (
+                    <div key={event.id} className="truncate text-[11px] text-neutral-700">{event.label}: {event.caseName}</div>
+                  ))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function DeceasedCell({
   record,
   contactOverrides,
@@ -1846,7 +2154,7 @@ function DeceasedCell({
     : hasCandidate
       ? 'Candidate'
       : 'Contact needed';
-  const contactName = contact?.primary || (hasCandidate ? record.contactCandidates[0].name : 'No contact on file');
+  const contactName = contact?.primary || (hasCandidate ? record.contactCandidates[0].name : '...');
   const contactTone = contact
     ? effective?.overridden
       ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950'
@@ -1871,13 +2179,13 @@ function DeceasedCell({
           <div className="min-w-0 rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-1 text-neutral-700">
             <div className="truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">DOB</div>
             <div className={`truncate font-semibold ${record.dateOfBirth ? '' : 'italic text-neutral-400'}`}>
-              {record.dateOfBirth ? formatTransitionDate(record.dateOfBirth) : 'Pending'}
+              {record.dateOfBirth ? formatTransitionDate(record.dateOfBirth) : '...'}
             </div>
           </div>
           <div className="min-w-0 rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-1 text-neutral-700">
             <div className="truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">Transition</div>
             <div className={`truncate font-semibold ${record.dateOfTransition ? '' : 'italic text-neutral-400'}`}>
-              {record.dateOfTransition ? formatTransitionDate(record.dateOfTransition) : 'Pending'}
+              {record.dateOfTransition ? formatTransitionDate(record.dateOfTransition) : '...'}
             </div>
           </div>
         </div>
@@ -1888,63 +2196,6 @@ function DeceasedCell({
         </div>
       </div>
     </button>
-  );
-}
-
-// Compact dropdown for the category filter-views, replacing six always-on header buttons.
-function ViewFilterMenu({ activeView, onChoose }: { activeView: ViewId; onChoose: (view: ViewId) => void }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  const activeIsCategory = categoryViews.includes(activeView);
-
-  function openMenu() {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) setPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 200)) });
-    setOpen(true);
-  }
-
-  return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => (open ? setOpen(false) : openMenu())}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="Filter the list by category"
-        className={`flex h-8 items-center gap-1 rounded-md px-2.5 text-xs font-bold transition ${
-          activeIsCategory ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-        }`}
-      >
-        {activeIsCategory ? viewLabels[activeView] : 'Categories'}
-        <svg viewBox="0 0 24 24" className="h-3 w-3" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      </button>
-      {open ? (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div role="menu" className="fixed z-50 w-48 rounded-lg border border-neutral-200 bg-white p-1 text-xs shadow-xl" style={{ top: pos.top, left: pos.left }}>
-            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-neutral-400">Filter by category</div>
-            {categoryViews.map((view) => (
-              <button
-                key={view}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  onChoose(view);
-                  setOpen(false);
-                }}
-                className={`block w-full rounded-md px-2 py-1.5 text-left font-semibold transition ${
-                  activeView === view ? 'bg-black text-[#efb70c]' : 'text-neutral-700 hover:bg-neutral-100'
-                }`}
-              >
-                {viewLabels[view]}
-              </button>
-            ))}
-          </div>
-        </>
-      ) : null}
-    </>
   );
 }
 
@@ -2098,7 +2349,7 @@ function EditableField({
   label: string;
   value: string;
   itemId: string;
-  field: Exclude<EditableItemField, 'priority'>;
+  field: EditableItemField;
   multiline?: boolean;
   inputType?: 'text' | 'date';
   placeholder?: string;
@@ -2262,43 +2513,6 @@ function GridDeathCertPill({
   return <span className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${tone}`}>{label}</span>;
 }
 
-function PrioritySelect({
-  item,
-  onUpdate,
-}: {
-  item: DashboardItem;
-  onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
-}) {
-  const [saving, setSaving] = useState(false);
-
-  async function changePriority(value: string) {
-    if (value === item.priority) return;
-    setSaving(true);
-    try {
-      await onUpdate(item.id, 'priority', value);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <label className="block rounded-md bg-neutral-50 px-2 py-1.5 text-xs">
-      <span className="block font-semibold text-neutral-500">Priority</span>
-      <select
-        value={item.priority}
-        disabled={saving}
-        onChange={(event) => changePriority(event.target.value)}
-        className="mt-1 h-8 w-full rounded-md border border-neutral-300 bg-white px-2 text-xs font-semibold capitalize outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
-      >
-        <option value="critical">Critical</option>
-        <option value="high">High</option>
-        <option value="normal">Normal</option>
-        <option value="done">Done</option>
-      </select>
-    </label>
-  );
-}
-
 function WorkflowChecklist({
   record,
   statusOverrides,
@@ -2409,6 +2623,9 @@ function DetailDrawer({
   workflowOverrides,
   milestoneOverrides,
   contactOverrides,
+  sources,
+  sheetSyncing,
+  sheetSyncMessage,
   auditEntries,
   detailLoading,
   onClose,
@@ -2417,12 +2634,16 @@ function DetailDrawer({
   onToggleStep,
   onCommitMilestone,
   onCommitContact,
+  onSyncSources,
 }: {
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
   workflowOverrides: WorkflowOverrideMap;
   milestoneOverrides: MilestoneOverrideMap;
   contactOverrides: ContactOverrideMap;
+  sources: SourceHealth[];
+  sheetSyncing: boolean;
+  sheetSyncMessage: string;
   auditEntries: AuditEntry[];
   detailLoading: boolean;
   onClose: () => void;
@@ -2431,6 +2652,7 @@ function DetailDrawer({
   onToggleStep: ToggleStep;
   onCommitMilestone: CommitMilestone;
   onCommitContact: CommitContact;
+  onSyncSources: () => void;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -2510,14 +2732,14 @@ function DetailDrawer({
         {/* No page scroll: fixed-height body. Primary editables (Schedule + Status) are
             always visible; secondary sections are collapsed boxes that expand in place and
             scroll only inside themselves when opened on a large case. */}
-        <div className="flex h-[calc(100dvh-73px)] flex-col overflow-hidden">
+        <div className="grid h-[calc(100dvh-73px)] grid-cols-[minmax(0,1fr)_340px] overflow-hidden max-xl:block">
           {detailLoading ? (
-            <div className="mx-3 mt-3 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
+            <div className="col-span-2 mx-3 mt-3 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
               Loading all linked rows and files for this family.
             </div>
           ) : null}
           {/* ONE primary scroll for the whole drawer. Collapsible sections expand inline. */}
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-8 pt-3">
+          <div className="min-h-0 space-y-3 overflow-y-auto px-3 pb-12 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
@@ -2555,28 +2777,6 @@ function DetailDrawer({
                   })()}
               </DrawerDisclosure>
 
-              <DrawerDisclosure title="Source details" meta="Read-only values from connected source rows" bodyClassName="space-y-2 p-2">
-                  {[
-                    { t: 'Dates & times', e: record.dateEntries, empty: 'No date or time values found.' },
-                    { t: 'Locations', e: record.locationEntries, empty: 'No location values found.' },
-                    { t: 'Service staff', e: record.serviceStaffEntries, empty: 'No service staff values found.' },
-                    { t: 'Service logistics', e: record.serviceLogisticsEntries, empty: 'No service logistics values found.' },
-                  ].map((grp) => (
-                    <div key={grp.t} className="rounded-md border border-neutral-200 p-2">
-                      <h4 className="text-xs font-bold text-neutral-700">{grp.t}</h4>
-                      <div className="mt-1 grid gap-1">
-                        {grp.e.length ? grp.e.map((entry, index) => (
-                          <div key={`${entry.label}-${index}`} className="rounded bg-neutral-50 px-2 py-1 text-xs">
-                            <span className="font-semibold text-neutral-600">{entry.label}: </span>
-                            <span className="break-words text-neutral-800">{entry.value}</span>
-                            <span className="ml-1 text-[10px] text-neutral-400">{entry.source}</span>
-                          </div>
-                        )) : <div className="text-xs italic text-neutral-400">{grp.empty}</div>}
-                      </div>
-                    </div>
-                  ))}
-              </DrawerDisclosure>
-
               <DrawerDisclosure title="Related work" meta={`${record.items.length} linked source rows and files`} bodyClassName="divide-y divide-neutral-100">
               {record.items.map((item) => (
                 <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
@@ -2589,7 +2789,6 @@ function DetailDrawer({
                       <EditableField label="Work item" value={item.label} itemId={item.id} field="label" onUpdate={onUpdate} />
                       <EditableField label="Assigned to" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
                       <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
-                      <PrioritySelect item={item} onUpdate={onUpdate} />
                       {item.area === 'death-cert' ? (
                         <div className="sm:col-span-2 xl:col-span-1 2xl:col-span-2">
                           <EditableField
@@ -2625,6 +2824,15 @@ function DetailDrawer({
               </DrawerDisclosure>
             </div>
           </div>
+          <aside className="min-h-0 border-l border-neutral-200 bg-neutral-50 max-xl:hidden">
+            <SourceAtGlance
+              record={record}
+              sources={sources}
+              sheetSyncing={sheetSyncing}
+              sheetSyncMessage={sheetSyncMessage}
+              onSync={onSyncSources}
+            />
+          </aside>
         </div>
       </aside>
     </div>
@@ -2648,7 +2856,6 @@ export default function BoardPage() {
   const [operationsError, setOperationsError] = useState('');
   const [sheetSyncMessage, setSheetSyncMessage] = useState('');
   const [sheetSyncing, setSheetSyncing] = useState(false);
-  const [showSources, setShowSources] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const operationsRequestRef = useRef(0);
 
@@ -3099,7 +3306,7 @@ export default function BoardPage() {
           milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized) ||
           contactSearchText(record, contactOverrides).toLowerCase().includes(normalized),
       )
-      .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides, contactOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
@@ -3124,8 +3331,7 @@ export default function BoardPage() {
               <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
             </div>
             <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-[#a77d00]">KC Golden Gate</div>
-              <h1 className="truncate text-lg font-bold text-black">{viewLabels[activeView]}</h1>
+              <h1 className="truncate text-lg font-bold text-black">Golden Gate Dashboard</h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-1">
@@ -3141,7 +3347,6 @@ export default function BoardPage() {
                 {viewLabels[view]}
               </button>
             ))}
-            <ViewFilterMenu activeView={activeView} onChoose={chooseView} />
             <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
             {appTopLinks.map((link) =>
               link.ready ? (
@@ -3166,8 +3371,8 @@ export default function BoardPage() {
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
-              <HeaderMetric label="Calls today" value={firstCallsToday} />
-              <HeaderMetric label="Services month" value={servicesCompletedThisMonth} />
+              <HeaderMetric label="First calls today" value={firstCallsToday} />
+              <HeaderMetric label="Services this month" value={servicesCompletedThisMonth} />
             </div>
             <input
               value={search}
@@ -3176,46 +3381,20 @@ export default function BoardPage() {
               className="h-8 w-48 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:w-56"
               aria-label="Search family or deceased"
             />
-            <button
-              type="button"
-              onClick={() => setShowSources((value) => !value)}
-              title="Source diagnostics"
-              className={`h-8 rounded-md border px-2.5 text-xs font-bold ${hasSourceIssue ? 'border-red-300 bg-red-50 text-red-800' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}
-            >
-              Sources
-            </button>
           </div>
         </div>
-        {showSources ? (
-          <div className="border-t border-neutral-100 bg-neutral-50 px-4 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              {sources.map((source) => (
-                <div key={source.id} className="rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-700">
-                  <span className="font-bold">{source.label}: </span>
-                  <span>{source.status}</span>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={syncWeeklySheet}
-                disabled={sheetSyncing}
-                className="h-8 rounded-md bg-black px-3 text-xs font-bold text-[#efb70c] disabled:opacity-60"
-              >
-                {sheetSyncing ? 'Syncing' : 'Sync master sheet'}
-              </button>
-              {sheetSyncMessage ? <span className="text-xs text-neutral-500">{sheetSyncMessage}</span> : null}
-            </div>
-          </div>
-        ) : null}
       </header>
 
       <main className="p-3">
+        {activeView === 'calendar' ? (
+          <CalendarBoard records={caseRecords} milestoneOverrides={milestoneOverrides} onOpenCase={setSelectedKey} />
+        ) : (
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
+          <div className="grid grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
-            <div className="px-2 py-2 text-center">Status</div>
+            <div className="px-2 py-2">Status</div>
           </div>
 
           <div className="divide-y divide-neutral-100">
@@ -3264,6 +3443,7 @@ export default function BoardPage() {
             )}
           </div>
         </section>
+        )}
       </main>
 
       <DetailDrawer
@@ -3272,6 +3452,9 @@ export default function BoardPage() {
         workflowOverrides={workflowOverrides}
         milestoneOverrides={milestoneOverrides}
         contactOverrides={contactOverrides}
+        sources={sources}
+        sheetSyncing={sheetSyncing}
+        sheetSyncMessage={sheetSyncMessage}
         auditEntries={auditEntries}
         detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
@@ -3280,6 +3463,7 @@ export default function BoardPage() {
         onToggleStep={commitWorkflowStep}
         onCommitMilestone={commitMilestone}
         onCommitContact={commitContact}
+        onSyncSources={syncWeeklySheet}
       />
 
       {syncState === 'unavailable' ? (
