@@ -1564,6 +1564,19 @@ function effectiveWorkflowStates(
     };
   });
 
+  // Closeout is the terminal operational state. If staff (or source-derived evidence)
+  // says a case is closed, the checklist should read as complete at a glance even when
+  // earlier source rows were sparse or never existed in the imported sheets.
+  const closeoutDone = base.some((state) => state.step.id === 'closeout' && state.done);
+  if (closeoutDone) {
+    return base.map((state) => ({
+      ...state,
+      auto: state.auto || !state.overridden,
+      done: true,
+      gap: false,
+    }));
+  }
+
   // Gap flag: an earlier step not done while a LATER step is done — a likely missed step.
   const lastDoneIdx = base.reduce((max, state, index) => (state.done ? index : max), -1);
   return base.map((state, index) => ({ ...state, gap: !state.done && index < lastDoneIdx }));
