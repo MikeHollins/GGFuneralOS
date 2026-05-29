@@ -1432,10 +1432,10 @@ function SourceAtGlance({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-neutral-200 bg-white px-3 py-2">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-black text-neutral-950">Master sheet at a glance</h3>
+          <h3 className="text-sm font-black text-neutral-950">Source evidence</h3>
           {sourceIssue ? <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">Source check</span> : null}
         </div>
-        <div className="text-[11px] text-neutral-500">Read-only source values surfaced for staff.</div>
+        <div className="text-[11px] text-neutral-500">Read-only source values for IT/debug review.</div>
       </div>
       <div className={`min-h-0 flex-1 space-y-2 p-3 ${scrollBody ? 'overflow-y-auto' : 'overflow-visible'}`}>
         {groups.map((group) => (
@@ -2855,6 +2855,7 @@ function DetailDrawer({
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
+  const [sourceEvidenceOpen, setSourceEvidenceOpen] = useState(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -2862,6 +2863,7 @@ function DetailDrawer({
 
   useEffect(() => {
     if (!record) return;
+    setSourceEvidenceOpen(false);
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeButton = closeButtonRef.current;
     window.setTimeout(() => closeButton?.focus(), 0);
@@ -2911,7 +2913,7 @@ function DetailDrawer({
       <aside
         role="dialog"
         aria-modal="true"
-        className="h-dvh w-[95vw] max-w-[1840px] overflow-hidden border-l border-neutral-200 bg-white shadow-2xl max-sm:w-[98vw]"
+        className="relative h-dvh w-[95vw] max-w-[1840px] overflow-hidden border-l border-neutral-200 bg-white shadow-2xl max-sm:w-[98vw]"
         onClick={(event) => event.stopPropagation()}
         aria-label={`Details for ${record.name}`}
       >
@@ -2947,16 +2949,38 @@ function DetailDrawer({
                 )}
               </div>
             </div>
-            <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
-              Close
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSourceEvidenceOpen((open) => !open)}
+                className="h-8 rounded-md border border-neutral-200 px-2.5 text-xs font-bold text-neutral-500 hover:bg-neutral-100"
+                aria-expanded={sourceEvidenceOpen}
+              >
+                Source evidence
+              </button>
+              <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
+                Close
+              </button>
+            </div>
           </div>
         </div>
+        {sourceEvidenceOpen ? (
+          <div className="absolute right-4 top-[72px] z-50 h-[min(760px,calc(100dvh-96px))] w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl">
+            <SourceAtGlance
+              record={record}
+              sources={sources}
+              sheetSyncing={sheetSyncing}
+              sheetSyncMessage={sheetSyncMessage}
+              onSync={onSyncSources}
+              scrollBody
+            />
+          </div>
+        ) : null}
 
         {/* The overlay/body never scrolls behind the drawer. The content pane owns one
             controlled scroll path so expanded sections remain reachable on short screens. */}
-        <div className="grid h-[calc(100dvh-73px)] grid-cols-[minmax(0,1fr)_340px] overflow-hidden max-xl:flex max-xl:flex-col">
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-3 pt-3">
+        <div className="h-[calc(100dvh-73px)] overflow-hidden">
+          <div className="h-full min-h-0 space-y-2 overflow-y-auto px-3 pb-3 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
@@ -2994,26 +3018,7 @@ function DetailDrawer({
                   })()}
               </DrawerDisclosure>
             </div>
-            <div className="xl:hidden">
-              <SourceAtGlance
-                record={record}
-                sources={sources}
-                sheetSyncing={sheetSyncing}
-                sheetSyncMessage={sheetSyncMessage}
-                onSync={onSyncSources}
-                scrollBody={false}
-              />
-            </div>
           </div>
-          <aside className="min-h-0 border-l border-neutral-200 bg-neutral-50 max-xl:hidden">
-            <SourceAtGlance
-              record={record}
-              sources={sources}
-              sheetSyncing={sheetSyncing}
-              sheetSyncMessage={sheetSyncMessage}
-              onSync={onSyncSources}
-            />
-          </aside>
         </div>
       </aside>
     </div>
@@ -3505,14 +3510,14 @@ export default function BoardPage() {
     : feedMeta
       ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
       : `${visibleRecords.length} families shown`;
-  // Actionable, always-real header counts (the prior first-call/services-month tickers read
-  // 0 because the source has no first-call dates or completed-service markers).
-  const activeCaseCount = useMemo(() => caseRecords.filter((record) => recordIsActive(record)).length, [caseRecords]);
-  const cremationsScheduled = useMemo(() => {
-    const cremationDef = DATE_MILESTONES.find((def) => def.key === 'cremation');
-    if (!cremationDef) return 0;
-    return caseRecords.filter((record) => effectiveMilestone(record, cremationDef, milestoneOverrides).state !== 'empty').length;
-  }, [caseRecords, milestoneOverrides]);
+  // Locked header ticker contract:
+  // - Cases this month is server-side distinct canonical case groups with business_date in the
+  //   current month. It is best-available operational activity, not legal DOD volume.
+  // - Cases this year is server-side distinct canonical case groups with resolver case_year equal
+  //   to the current year. Do not replace these with feed-window counts.
+  const headerMetrics = feedMeta?.metrics;
+  const casesThisMonth = headerMetrics?.cases_this_month ?? 0;
+  const casesThisYear = headerMetrics?.cases_this_year ?? 0;
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
@@ -3563,8 +3568,8 @@ export default function BoardPage() {
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
-              <HeaderMetric label="Active cases" value={activeCaseCount} />
-              <HeaderMetric label="Cremations scheduled" value={cremationsScheduled} />
+              <HeaderMetric label="Cases this month" value={casesThisMonth} />
+              <HeaderMetric label="Cases this year" value={casesThisYear} />
             </div>
             <input
               value={search}

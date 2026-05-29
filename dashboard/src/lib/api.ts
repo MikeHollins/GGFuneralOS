@@ -316,6 +316,16 @@ export interface OperationsFeed {
     limited: boolean;
     query: string;
     case_key: string;
+    metrics?: {
+      cases_this_month: number;
+      cases_this_year: number;
+      month_label: string;
+      year: number;
+      basis: {
+        cases_this_month: string;
+        cases_this_year: string;
+      };
+    };
   };
   item_audit: OperationalItemAudit[];
   sources: Array<{

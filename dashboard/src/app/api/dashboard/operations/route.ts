@@ -21,6 +21,10 @@ type ItemQuery = {
   caseKey?: string;
 };
 
+function canonicalCaseKeySql() {
+  return `NULLIF(coalesce(source_payload->>'case_group_key', source_payload->>'case_match_key'), '')`;
+}
+
 function toDashboardItem(row: any): DashboardItem {
   return {
     id: row.item_id,
@@ -224,6 +228,49 @@ async function getRecentItemAudit() {
   );
 }
 
+async function getDashboardMetrics() {
+  const sql = getSql();
+  const now = new Date();
+  const year = now.getFullYear();
+  const monthStart = new Date(year, now.getMonth(), 1).toISOString().slice(0, 10);
+  const nextMonthStart = new Date(year, now.getMonth() + 1, 1).toISOString().slice(0, 10);
+  const monthLabel = now.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+  const canonicalKey = canonicalCaseKeySql();
+
+  // Header tickers are intentionally locked:
+  // - Cases this year = distinct canonical case groups with resolver case_year == current year.
+  // - Cases this month = distinct canonical case groups with a real operational business_date in
+  //   the current month. This is an activity-date metric, not a legal DOD count, until a verified
+  //   DOD/first-call source exists. Do not derive monthly cases from Golden Gate's YY-NNN refs:
+  //   those refs encode year only and are per-register, not global case IDs.
+  const rows = await sql(
+    `SELECT
+       COUNT(DISTINCT ${canonicalKey}) FILTER (
+         WHERE source_payload->>'case_year' = $1
+       )::int AS cases_this_year,
+       COUNT(DISTINCT ${canonicalKey}) FILTER (
+         WHERE business_date >= $2::date
+           AND business_date < $3::date
+       )::int AS cases_this_month
+     FROM operational_items
+     WHERE source_origin = 'google-sheet'
+       AND is_archived = false
+       AND ${canonicalKey} IS NOT NULL`,
+    [String(year), monthStart, nextMonthStart],
+  );
+
+  return {
+    cases_this_month: Number(rows[0]?.cases_this_month ?? 0),
+    cases_this_year: Number(rows[0]?.cases_this_year ?? 0),
+    month_label: monthLabel,
+    year,
+    basis: {
+      cases_this_month: 'Distinct canonical case groups with business_date in the current month; activity-date based, not DOD based.',
+      cases_this_year: 'Distinct canonical case groups with resolver case_year equal to the current year.',
+    },
+  };
+}
+
 async function checkGoogleSheet(checkedAt: string): Promise<SourceStatus> {
   const hasCredentials =
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
@@ -397,15 +444,16 @@ export async function GET(request: Request) {
           checked_at: checkedAt,
         }),
       ];
-  const [feed, itemAudit, ...sources] = await Promise.all([
+  const [feed, itemAudit, metrics, ...sources] = await Promise.all([
     getItems({ limit: initialLimit, query, caseKey }),
     getRecentItemAudit(),
+    getDashboardMetrics(),
     ...sourceChecks,
   ]);
 
   return NextResponse.json({
     items: feed.items,
-    meta: feed.meta,
+    meta: { ...feed.meta, metrics },
     item_audit: itemAudit,
     sources,
   });
