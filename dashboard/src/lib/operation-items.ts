@@ -18,11 +18,36 @@ export type DashboardItem = {
   source: string;
   sourceRef?: string | null;
   sourcePayload?: Record<string, string>;
+  dateOfDeath?: string | null;
   createdAt?: string;
   status: string;
   priority: 'critical' | 'high' | 'normal' | 'done';
   options: string[];
 };
+
+// Missouri MoEVR death-certificate filing deadline: 5 days from date of death (RSMo 193.145).
+// Mirrors the canonical rule in src/agents/compliance/mo-death-cert.ts. Fail-closed:
+// returns null for any missing/unparseable date so the UI can never show an invented
+// deadline.
+export const DEATH_CERT_FILING_DAYS = 5;
+
+export function deathCertDeadline(dateOfDeath: string | null | undefined): {
+  daysRemaining: number;
+  status: 'overdue' | 'due-soon' | 'ok';
+  deadlineLabel: string;
+} | null {
+  const text = dateOfDeath?.trim();
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const dod = new Date(`${text}T12:00:00`);
+  if (Number.isNaN(dod.getTime())) return null;
+  const deadline = new Date(dod.getTime() + DEATH_CERT_FILING_DAYS * 86_400_000);
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const daysRemaining = Math.ceil((deadline.getTime() - today.getTime()) / 86_400_000);
+  const status = daysRemaining < 0 ? 'overdue' : daysRemaining <= 1 ? 'due-soon' : 'ok';
+  const deadlineLabel = deadline.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return { daysRemaining, status, deadlineLabel };
+}
 
 export const statusOptions = {
   service: ['Needs info', 'Ready', 'In service', 'Complete'],

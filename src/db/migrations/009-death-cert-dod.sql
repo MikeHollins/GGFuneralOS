@@ -1,0 +1,11 @@
+-- 009 — Date of Death capture for death-cert deadline tracking
+--
+-- Golden Gate's master spreadsheet does not record date of death anywhere (verified
+-- across all 18 tabs), so the Missouri MoEVR 5-day filing deadline (RSMo 193.145) cannot
+-- be computed from the read-only source. This column lets staff capture/backfill date of
+-- death directly in our own Neon DB (never writing to Golden Gate's sheet).
+--
+-- The Google-Sheet sync never writes this column, so a value set here survives every
+-- re-sync. Stored as TEXT in canonical YYYY-MM-DD form (the API validates the format and
+-- treats anything else as absent — fail-closed: no DOD means no deadline, never a guess).
+ALTER TABLE operational_items ADD COLUMN IF NOT EXISTS date_of_death TEXT;

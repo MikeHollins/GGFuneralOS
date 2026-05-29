@@ -30,6 +30,7 @@ function toDashboardItem(row: any): DashboardItem {
     source: row.source,
     sourceRef: row.source_ref,
     sourcePayload: row.source_payload ?? {},
+    dateOfDeath: row.date_of_death ?? null,
     createdAt: row.created_at,
     status: row.status_default,
     priority: row.priority,
@@ -128,7 +129,7 @@ async function getItems({
 
   const [rows, totalRows] = await Promise.all([
     sql(
-      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, created_at, status_default, priority, options
+      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, created_at, status_default, priority, options
      FROM operational_items
      WHERE ${filters.join(' AND ')}
      ORDER BY
