@@ -372,6 +372,76 @@ function derivePriority(record: Record<string, string>, config: SheetConfig): Da
   return 'normal';
 }
 
+function parseSheetDate(value: string | undefined): Date | null {
+  const text = value?.trim();
+  if (!text) return null;
+  const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  // Sheets use both M/D/Y and M.D.Y (e.g. "8/1/2024", "5.21.2026").
+  const md = text.match(/\b(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})\b/);
+  if (md) {
+    const year = Number(md[3].length === 2 ? `20${md[3]}` : md[3]);
+    const d = new Date(year, Number(md[1]) - 1, Number(md[2]), 12);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+function hasValue(record: Record<string, string>, ...keys: string[]) {
+  return keys.some((key) => record[key]?.trim());
+}
+
+// Derive a per-row status from the sheet's OWN state cells, mapped onto the area's
+// statusOptions. Conservative by design: when the sheet gives no reliable signal we keep
+// config.defaultStatus rather than guessing. This matters most for death certs, where a
+// wrong "Filed" could mask a blown Missouri filing window — so we err toward NOT-filed
+// (fail-closed), and only mark Filed on explicit completion language.
+function deriveStatus(record: Record<string, string>, config: SheetConfig): string {
+  if (config.area === 'death-cert') {
+    // No status enum exists; the state lives as free text in column_3 / c_j_email_dc / other_info.
+    const narrative = [record.column_3, record.c_j_email_dc, record.other_info, record.notes]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (!narrative) return config.defaultStatus; // 'Not started'
+    if (/\b(picked up|mailed|delivered|faxed|filed)\b/.test(narrative)) return 'Filed';
+    if (/ready for (pick ?up|p\/u|pickup)/.test(narrative)) return 'Filed'; // issued, awaiting family pickup
+    if (/\bsent\b/.test(narrative)) return 'Filed';
+    if (/\bready to (file|submit)\b/.test(narrative)) return 'Ready to file';
+    if (/\b(coroner|medical examiner|\bme\b|pending)\b/.test(narrative)) return 'ME pending';
+    return config.defaultStatus;
+  }
+
+  if (config.area === 'cremains') {
+    if (hasValue(record, 'pick_up_date', 'pickup_date', 'signature_of_receiver', 'receiver', 'released_to')) return 'Picked up';
+    if (hasValue(record, 'date_of_return', 'return_date', 'release_date')) return 'Ready pickup';
+    return config.defaultStatus; // respects the per-sheet default ('Ready pickup' / 'Picked up')
+  }
+
+  if (config.area === 'crematory') {
+    const cremation = parseSheetDate(record.date_of_cremation || record.cremation_date || record.date);
+    if (cremation) return cremation.getTime() <= Date.now() ? 'Completed' : 'Scheduled';
+    return config.defaultStatus; // 'Scheduled'
+  }
+
+  if (config.area === 'service') {
+    const serviceDate = parseSheetDate(record.service_date || record.date);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    if (serviceDate && serviceDate.getTime() < startOfToday.getTime()) return 'Complete';
+    const logisticsFilled = ['casket', 'programs', 'hearse', 'lead', 'cemetery', 'flowers'].filter((key) => record[key]?.trim()).length;
+    if (logisticsFilled >= 3) return 'Ready';
+    return config.defaultStatus; // 'Needs info'
+  }
+
+  // belongings / arrangement: the sheet carries no status signal — keep the default
+  // rather than inventing one.
+  return config.defaultStatus;
+}
+
 function displayKey(key: string) {
   return key
     .replace(/^_/, '')
@@ -441,7 +511,7 @@ function recordToItem(record: Record<string, string>, config: SheetConfig): Dash
     owner: ownerValue(record, config) || config.defaultOwner,
     due,
     source: config.sheet,
-    status: config.defaultStatus,
+    status: deriveStatus(record, config),
     priority: derivePriority(record, config),
     options: optionsFor(config.area),
   };
