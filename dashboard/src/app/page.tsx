@@ -1014,7 +1014,7 @@ function WorkflowStepButton({
           {state.gap && !state.done ? '!' : '✓'}
         </span>
         <WorkflowGlyph stepId={state.step.id} />
-        <span className="hidden 2xl:inline">{state.step.shortLabel}</span>
+        <span className="hidden lg:inline">{state.step.shortLabel}</span>
         {state.overridden ? <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
       </button>
       {open ? (
@@ -1814,7 +1814,7 @@ function DetailDrawer({
                     </div>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <EditableField label="Work item" value={item.label} itemId={item.id} field="label" onUpdate={onUpdate} />
-                      <EditableField label="Family Contact" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
+                      <EditableField label="Assigned to" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
                       <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
                       <PrioritySelect item={item} onUpdate={onUpdate} />
                       {item.area === 'death-cert' ? (
