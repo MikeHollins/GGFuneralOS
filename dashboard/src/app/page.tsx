@@ -1664,11 +1664,14 @@ function WorkflowStepButton({
       <button
         ref={triggerRef}
         type="button"
-        onClick={openMenu}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenDetails();
+        }}
         title={`${state.step.label} — ${state.step.hint}. ${
           state.done ? 'Done' : state.gap ? 'Needs attention — a later step is already done' : 'Not done'
-        }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to set.`}
-        aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to set.`}
+        }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to open case details.`}
+        aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to open case details.`}
         className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold leading-tight transition ${tone}`}
       >
         <span
@@ -3142,11 +3145,24 @@ export default function BoardPage() {
             ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
-                className="grid w-full grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:block"
+                onClick={() => setSelectedKey(record.key)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setSelectedKey(record.key);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                className="grid w-full cursor-pointer grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:block"
+                aria-label={`Open details for ${record.name}`}
               >
                 <button
                   type="button"
-                  onClick={() => setSelectedKey(record.key)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelectedKey(record.key);
+                  }}
                   className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7]"
                   aria-label={`Open details for ${record.name}`}
                 >
