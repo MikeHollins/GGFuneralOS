@@ -113,10 +113,12 @@ const primaryViews: ViewId[] = ['active', 'today', 'cases'];
 // Category views are loose filters over the same table — collapsed into a compact menu.
 const categoryViews: ViewId[] = ['service', 'arrangements', 'death-certs', 'cremains', 'belongings', 'files'];
 
+// `ready` = backed by a live Next dashboard API. Pages whose APIs aren't ported into the
+// dashboard app yet are shown disabled ("soon") so nothing looks live but broken.
 const appTopLinks = [
-  { href: '/texts', label: 'Texts' },
-  { href: '/payments', label: 'Payments' },
-  { href: '/staff', label: 'Staff/Admin' },
+  { href: '/staff', label: 'Staff/Admin', ready: true },
+  { href: '/texts', label: 'Texts', ready: false },
+  { href: '/payments', label: 'Payments', ready: false },
 ];
 
 const visibleRecordLimit = 200;
@@ -165,17 +167,20 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 
 // Structured scheduling/location milestones shown as compact grid slots and edited in the
 // drawer. Source-derived values are the default; staff overrides (incl. N/A) live in Neon.
-type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location'; sourceKeys: string[] };
+type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location'; areas: OperationArea[]; sourceKeys: string[] };
+// areas: only pull this milestone's source value from rows of the relevant area (so a
+// cremation date can't come from a service row, etc.). Date slots use date columns only
+// (times are excluded — combining date+time is a future step).
 const DATE_MILESTONES: MilestoneDef[] = [
-  { key: 'first_call', label: 'Call', full: 'First call', kind: 'date', sourceKeys: ['first_call_date', 'first_call', 'date_received', 'received_date'] },
-  { key: 'service', label: 'Service', full: 'Service', kind: 'date', sourceKeys: ['service_date', 'service_time', 'date', 'time'] },
-  { key: 'cremation', label: 'Cremation', full: 'Cremation', kind: 'date', sourceKeys: ['cremation_date', 'date_of_cremation'] },
-  { key: 'burial', label: 'Burial', full: 'Burial', kind: 'date', sourceKeys: ['committal_date', 'committal_time'] },
+  { key: 'first_call', label: 'Call', full: 'First call', kind: 'date', areas: ['death-cert', 'paperwork'], sourceKeys: ['first_call_date', 'first_call', 'date_received', 'received_date'] },
+  { key: 'service', label: 'Service', full: 'Service', kind: 'date', areas: ['service', 'arrangement'], sourceKeys: ['service_date', 'date'] },
+  { key: 'cremation', label: 'Cremation', full: 'Cremation', kind: 'date', areas: ['crematory', 'cremains'], sourceKeys: ['cremation_date', 'date_of_cremation'] },
+  { key: 'burial', label: 'Burial', full: 'Burial', kind: 'date', areas: ['service'], sourceKeys: ['committal_date', 'burial_date'] },
 ];
 const LOCATION_MILESTONES: MilestoneDef[] = [
-  { key: 'service_location', label: 'Service', full: 'Service location', kind: 'location', sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
-  { key: 'cremation_location', label: 'Cremation', full: 'Cremation location', kind: 'location', sourceKeys: ['crematory', 'crematory_name'] },
-  { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
+  { key: 'service_location', label: 'Service', full: 'Service location', kind: 'location', areas: ['service', 'arrangement'], sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
+  { key: 'cremation_location', label: 'Cremation', full: 'Cremation location', kind: 'location', areas: ['crematory', 'cremains'], sourceKeys: ['crematory', 'crematory_name'] },
+  { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', areas: ['service'], sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
 ];
 const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES];
 
@@ -638,13 +643,28 @@ function formatTransitionDate(raw: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-// First non-empty source-derived value for a milestone, across the case's source rows.
-function sourceMilestoneValue(record: CaseRecord, sourceKeys: string[]) {
-  for (const item of record.items) {
+// Reject values that are clearly NOT a real milestone (booleans, prices, bare numbers).
+function isMilestoneNoise(value: string) {
+  const t = value.trim();
+  if (/^(no|yes|n\/a|na|none|tbd|n|y|unknown)$/i.test(t)) return true; // e.g. "Burial: No"
+  if (/\$/.test(t)) return true; // prices
+  if (/^[\d.,]+$/.test(t)) return true; // number/price-only
+  return false;
+}
+
+// Area-aware source-derived value for a milestone: pull only from rows of the relevant
+// area, skip noise, and (for date slots) skip time-only values. Falls back to all rows
+// only when no area-matched row exists, so the mapping never silently goes empty.
+function sourceMilestoneValue(record: CaseRecord, def: MilestoneDef) {
+  const inArea = def.areas.length ? record.items.filter((item) => def.areas.includes(item.area)) : [];
+  const pool = inArea.length ? inArea : record.items;
+  for (const item of pool) {
     const payload = sourcePayload(item);
-    for (const key of sourceKeys) {
-      const value = cleanDisplay(payload[key]);
-      if (value) return value;
+    for (const key of def.sourceKeys) {
+      const value = cleanDisplay(payload[key]).trim();
+      if (!value || isMilestoneNoise(value)) continue;
+      if (def.kind === 'date' && /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*$/i.test(value)) continue; // a time alone is not a date
+      return value;
     }
   }
   return '';
@@ -657,7 +677,7 @@ function effectiveMilestone(record: CaseRecord, def: MilestoneDef, overrides: Mi
     if (override.isNa) return { def, state: 'na', value: '', overridden: true };
     if (override.value) return { def, state: 'set', value: override.value, overridden: true };
   }
-  const source = sourceMilestoneValue(record, def.sourceKeys);
+  const source = sourceMilestoneValue(record, def);
   if (source) return { def, state: 'source', value: source, overridden: false };
   return { def, state: 'empty', value: '', overridden: false };
 }
@@ -716,7 +736,7 @@ type CommitMilestone = (record: CaseRecord, def: MilestoneDef, value: string, is
 // inline edit, an N/A toggle, and a "use source" revert. Initials-gated on save.
 function MilestoneField({ record, def, overrides, onCommit }: { record: CaseRecord; def: MilestoneDef; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
   const effective = effectiveMilestone(record, def, overrides);
-  const source = sourceMilestoneValue(record, def.sourceKeys);
+  const source = sourceMilestoneValue(record, def);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -2485,15 +2505,25 @@ export default function BoardPage() {
             ))}
             <ViewFilterMenu activeView={activeView} onChoose={chooseView} />
             <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
-            {appTopLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
-              >
-                {link.label}
-              </Link>
-            ))}
+            {appTopLinks.map((link) =>
+              link.ready ? (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+                >
+                  {link.label}
+                </Link>
+              ) : (
+                <span
+                  key={link.href}
+                  title="Not connected yet"
+                  className="flex h-8 cursor-not-allowed items-center gap-1 rounded-md px-2.5 text-xs font-bold text-neutral-300"
+                >
+                  {link.label}<span className="text-[9px] font-semibold uppercase">soon</span>
+                </span>
+              ),
+            )}
           </div>
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
