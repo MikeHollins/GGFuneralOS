@@ -321,6 +321,11 @@ function cleanArrangementCell(value: string) {
   const normalized = withoutBlockPrefix.toLowerCase();
   if (!withoutBlockPrefix || ['block', 'lunch', 'time', 'date', 'day'].includes(normalized)) return '';
   if (isTimeLike(withoutBlockPrefix)) return '';
+  // Reject day-header / date cells that leak in from stacked week-blocks
+  // ("Friday June 5", "Monday 6/1/2026", "Thursday Jun 4") and bare dates — they are
+  // sub-headers, not appointments.
+  if (/^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i.test(withoutBlockPrefix) && /\d/.test(withoutBlockPrefix)) return '';
+  if (looksLikeDateOrTime(withoutBlockPrefix)) return '';
   return withoutBlockPrefix;
 }
 
@@ -533,16 +538,26 @@ function arrangementCalendarEntries(rows: string[][], config: SheetConfig) {
   if (!rows.length) return entries;
 
   const weekday = /\b(mon|tue|wed|thu|fri|sat|sun)/i;
-  const headerIdx = rows.findIndex((row) => row.filter((cell) => weekday.test(String(cell ?? ''))).length >= 2);
+  const isHeaderRow = (row: string[]) => row.filter((cell) => weekday.test(String(cell ?? ''))).length >= 2;
+  const headerColumns = (row: string[]) =>
+    row
+      .map((cell, index) => ({ index, label: cleanDayLabel(String(cell ?? '')) }))
+      .filter((column) => column.index > 0 && column.label);
+
+  const headerIdx = rows.findIndex(isHeaderRow);
   if (headerIdx < 0) return entries;
 
-  const header = rows[headerIdx].map((cell) => cleanDayLabel(String(cell ?? '')));
-  const dayColumns = header
-    .map((label, index) => ({ index, label }))
-    .filter((column) => column.index > 0 && column.label);
+  // The sheet stacks multiple week-blocks vertically. Re-anchor the day columns at each
+  // new header row, and NEVER emit a header row's own cells as appointments — otherwise
+  // a lower week's day labels ("Monday 6/1/2026") leak in as fake arrangements.
+  let dayColumns = headerColumns(rows[headerIdx]);
 
   for (let rowIdx = headerIdx + 1; rowIdx < rows.length; rowIdx += 1) {
     const row = rows[rowIdx] || [];
+    if (isHeaderRow(row)) {
+      dayColumns = headerColumns(row);
+      continue;
+    }
     const timeCell = cleanDayLabel(String(row[0] ?? ''));
     const time = isTimeLike(timeCell) ? timeCell : '';
 
@@ -689,17 +704,22 @@ async function bulkUpsertItems(rows: ImportRow[]) {
   }
 }
 
-async function archiveMissingSourceRows(activeSourceRefs: string[]) {
-  if (!activeSourceRefs.length) return 0;
+// Archive only within tabs that were successfully read THIS run (readSources). If a tab's
+// parser under-imports, errors, or temporarily returns nothing, its rows are left intact
+// rather than wrongly archived — a global "anything not seen" sweep could wipe a whole
+// tab's valid internal copies on a single bad parse.
+async function archiveMissingSourceRows(activeSourceRefs: string[], readSources: string[]) {
+  if (!readSources.length) return 0;
   const sql = getSql();
   const rows = await sql(
     `UPDATE operational_items
      SET is_archived = true, updated_at = now()
      WHERE source_origin = 'google-sheet'
        AND is_archived = false
+       AND source = ANY($2)
        AND NOT (source_ref = ANY($1))
      RETURNING item_id`,
-    [activeSourceRefs],
+    [activeSourceRefs, readSources],
   );
   return rows.length;
 }
@@ -749,7 +769,11 @@ export async function syncWeeklyServiceSchedule() {
 
   await bulkUpsertItems(importRows);
   const activeSourceRefs = importRows.map((row) => row.source_ref);
-  const archived = await archiveMissingSourceRows(activeSourceRefs);
+  // Only tabs that actually imported rows this run are eligible for archiving.
+  const readSources = Object.entries(importedBySheet)
+    .filter(([, count]) => count > 0)
+    .map(([sheet]) => sheet);
+  const archived = await archiveMissingSourceRows(activeSourceRefs, readSources);
   const archivedPrototype = activeSourceRefs.length ? await archivePrototypeItems() : 0;
 
   return {
