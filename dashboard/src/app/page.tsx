@@ -3028,6 +3028,8 @@ function DetailDrawer({
 export default function BoardPage() {
   const [activeView, setActiveView] = useState<ViewId>('active');
   const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count'>('name');
+  const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
   const [items, setItems] = useState<DashboardItem[]>([]);
   const [feedMeta, setFeedMeta] = useState<FeedMeta | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
@@ -3501,9 +3503,22 @@ export default function BoardPage() {
           milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized) ||
           contactSearchText(record, contactOverrides).toLowerCase().includes(normalized),
       )
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides, contactOverrides]);
-  const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
+      .sort((a, b) => {
+        if (sortMode === 'recent') {
+          return (b.updatedAt || '').localeCompare(a.updatedAt || '') || a.name.localeCompare(b.name);
+        }
+        if (sortMode === 'count') {
+          return b.items.length - a.items.length || a.name.localeCompare(b.name);
+        }
+        return a.name.localeCompare(b.name);
+      });
+  }, [activeView, caseRecords, search, sortMode, statusOverrides, milestoneOverrides, contactOverrides]);
+  const visibleRecords = useMemo(() => matchingRecords.slice(0, recordLimit), [matchingRecords, recordLimit]);
+  // Reset the visible window whenever the filtered/sorted set changes, so "Show more" never
+  // leaves a stale large window applied to a freshly narrowed view.
+  useEffect(() => {
+    setRecordLimit(visibleRecordLimit);
+  }, [activeView, search, sortMode]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const visibleSummary = operationsLoading
     ? 'Loading dashboard records'
@@ -3571,6 +3586,16 @@ export default function BoardPage() {
               <HeaderMetric label="Cases this month" value={casesThisMonth} />
               <HeaderMetric label="Cases this year" value={casesThisYear} />
             </div>
+            <select
+              value={sortMode}
+              onChange={(event) => setSortMode(event.target.value as 'name' | 'recent' | 'count')}
+              className="hidden h-8 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs font-semibold text-neutral-700 outline-none focus:border-[#efb70c] sm:block"
+              aria-label="Sort families"
+            >
+              <option value="name">Sort: Name A–Z</option>
+              <option value="recent">Sort: Recently updated</option>
+              <option value="count">Sort: Most records</option>
+            </select>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -3638,6 +3663,17 @@ export default function BoardPage() {
                 {search.trim() ? 'No families matched this search.' : 'No families matched this view.'}
               </div>
             )}
+            {!operationsLoading && !operationsError && matchingRecords.length > recordLimit ? (
+              <div className="px-4 py-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => setRecordLimit((limit) => limit + visibleRecordLimit)}
+                  className="h-8 rounded-md border border-neutral-200 bg-white px-4 text-xs font-bold text-neutral-700 hover:bg-neutral-100"
+                >
+                  Show more ({(matchingRecords.length - recordLimit).toLocaleString()} more)
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
         )}
