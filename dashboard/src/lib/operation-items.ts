@@ -49,6 +49,44 @@ export function deathCertDeadline(dateOfDeath: string | null | undefined): {
   return { daysRemaining, status, deadlineLabel };
 }
 
+// Canonical sensitive-value masking, used at every boundary that could expose raw source
+// data (the API source_payload, the sync detail string). Mirrors the project rule: SSN and
+// phone numbers are reduced to last-4; never emit them in full.
+export function maskSensitiveValue(key: string, value: string): string {
+  const lowerKey = key.toLowerCase();
+  const trimmed = (value ?? '').trim();
+  const digits = trimmed.replace(/\D/g, '');
+
+  if (lowerKey.includes('ssn') || lowerKey.includes('social_security')) {
+    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
+  }
+  if (lowerKey.includes('phone') || lowerKey.includes('cell') || lowerKey.includes('telephone')) {
+    return digits.length >= 4 ? `ending ${digits.slice(-4)}` : 'masked';
+  }
+  if (/^\D*\d{3}\D*\d{2}\D*\d{4}\D*$/.test(trimmed)) {
+    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
+  }
+  if (digits.length === 10 && /phone|cell|contact|number/.test(lowerKey)) {
+    return `ending ${digits.slice(-4)}`;
+  }
+  return trimmed;
+}
+
+// Keys that carry no PII but ARE relied on for client-side logic (case grouping, row
+// identity). Never run them through the masker.
+const NEVER_MASK_KEYS = new Set(['case_match_key', 'case_match_basis', '_row_number']);
+
+// Sanitize a raw source_payload before it leaves the server for an authenticated browser
+// client. The UI only ever needs masked values; raw spreadsheet PII must not cross the wire.
+export function sanitizeSourcePayload(payload?: Record<string, string> | null): Record<string, string> {
+  if (!payload || typeof payload !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    out[key] = NEVER_MASK_KEYS.has(key) ? String(value ?? '') : maskSensitiveValue(key, String(value ?? ''));
+  }
+  return out;
+}
+
 export const statusOptions = {
   service: ['Needs info', 'Ready', 'In service', 'Complete'],
   arrangement: ['Unconfirmed', 'Confirmed', 'Family arrived', 'Complete'],

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
-import { dashboardItems, type DashboardItem } from '@/lib/operation-items';
+import { dashboardItems, sanitizeSourcePayload, type DashboardItem } from '@/lib/operation-items';
 import { probeGoogleSheetsConnection } from '@/lib/weekly-service-sync';
 
 type SourceStatus = {
@@ -29,7 +29,7 @@ function toDashboardItem(row: any): DashboardItem {
     due: row.due_text,
     source: row.source,
     sourceRef: row.source_ref,
-    sourcePayload: row.source_payload ?? {},
+    sourcePayload: sanitizeSourcePayload(row.source_payload),
     dateOfDeath: row.date_of_death ?? null,
     createdAt: row.created_at,
     status: row.status_default,

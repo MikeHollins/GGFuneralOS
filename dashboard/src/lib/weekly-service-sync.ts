@@ -2,7 +2,7 @@ import { createHash, createSign } from 'crypto';
 import { readFile } from 'fs/promises';
 import { getSql } from './db';
 import { normalizeHeader } from './csv';
-import { dashboardItems, statusOptions, type DashboardItem, type OperationArea } from './operation-items';
+import { dashboardItems, maskSensitiveValue, statusOptions, type DashboardItem, type OperationArea } from './operation-items';
 
 type ServiceAccountCredentials = {
   client_email: string;
@@ -457,27 +457,9 @@ function displayKey(key: string) {
 }
 
 function safeDetailValue(key: string, value: string) {
-  const lowerKey = key.toLowerCase();
-  const trimmed = value.trim();
-  const digits = trimmed.replace(/\D/g, '');
-
-  if (lowerKey.includes('ssn') || lowerKey.includes('social_security')) {
-    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
-  }
-
-  if (lowerKey.includes('phone') || lowerKey.includes('cell') || lowerKey.includes('telephone')) {
-    return digits.length >= 4 ? `ending ${digits.slice(-4)}` : 'masked';
-  }
-
-  if (/^\D*\d{3}\D*\d{2}\D*\d{4}\D*$/.test(trimmed)) {
-    return digits.length >= 4 ? `***-**-${digits.slice(-4)}` : 'masked';
-  }
-
-  if (digits.length === 10 && /phone|cell|contact|number/.test(lowerKey)) {
-    return `ending ${digits.slice(-4)}`;
-  }
-
-  return trimmed;
+  // Delegate to the single canonical masker so the sync detail string and the API
+  // source_payload can never diverge on what counts as sensitive.
+  return maskSensitiveValue(key, value);
 }
 
 function detailFor(record: Record<string, string>, config: SheetConfig) {

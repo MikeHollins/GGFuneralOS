@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
+import { sanitizeSourcePayload } from '@/lib/operation-items';
 
 const editableFields = new Set(['label', 'detail', 'owner', 'due', 'priority', 'date_of_death']);
 const selectableColumns = new Set(['label', 'detail', 'owner', 'due_text', 'priority', 'date_of_death']);
@@ -41,7 +42,7 @@ function toDashboardItem(row: any) {
     due: row.due_text,
     source: row.source,
     sourceRef: row.source_ref,
-    sourcePayload: row.source_payload ?? {},
+    sourcePayload: sanitizeSourcePayload(row.source_payload),
     dateOfDeath: row.date_of_death ?? null,
     status: row.status_default,
     priority: row.priority,
