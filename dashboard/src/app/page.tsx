@@ -28,6 +28,20 @@ type AuditEntry = {
   changedAt: string;
 };
 
+// Merge audit entries from multiple sources (status, workflow, milestone), dedupe by
+// timestamp+item+value, newest first.
+function mergeAudit(incoming: AuditEntry[], existing: AuditEntry[]): AuditEntry[] {
+  const seen = new Set<string>();
+  const all: AuditEntry[] = [];
+  for (const entry of [...incoming, ...existing]) {
+    const key = `${entry.changedAt}|${entry.itemId}|${entry.to ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    all.push(entry);
+  }
+  return all.sort((a, b) => (a.changedAt < b.changedAt ? 1 : -1)).slice(0, 200);
+}
+
 type StatusOverride = {
   status: string;
   initials: string;
@@ -1725,99 +1739,87 @@ function WorkflowChecklist({
   const effectiveStates = effectiveWorkflowStates(record, statusOverrides, workflowOverrides);
   const stateById = new Map(effectiveStates.map((state) => [state.step.id, state]));
 
+  const openState = openStep ? stateById.get(openStep) : null;
+  const openStepDef = openState?.step ?? null;
+  const openRelated = openStepDef ? workflowItemsFor(record, openStepDef) : [];
+  const openPrimary = openRelated[0] ?? null;
+  const openFacts = openPrimary && openStepDef ? workflowFacts(openPrimary, openStepDef) : [];
+  const openDetailItems = openRelated.filter((item) => item.id !== openPrimary?.id).slice(0, 5);
+
   return (
     <section className="rounded-lg border border-neutral-200 bg-white">
       <div className="border-b border-neutral-200 px-3 py-2">
         <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
       </div>
-      <div className="grid grid-cols-1 gap-2 p-3">
-        {familyWorkflow.map((step) => {
-          const relatedItems = workflowItemsFor(record, step);
-          const primary = relatedItems[0] ?? null;
-          const stepState = stateById.get(step.id);
-          const done = stepState?.done ?? false;
-          const gap = stepState?.gap ?? false;
-          const overridden = stepState?.overridden ?? false;
-          const open = openStep === step.id;
-          const summary = workflowSummary(primary, step, primary ? statusOverrides[primary.id] : undefined);
-          const facts = primary ? workflowFacts(primary, step) : [];
-          const detailItems = relatedItems.filter((item) => item.id !== primary?.id).slice(0, 5);
-
+      {/* Compact multi-column boxes — all 8 steps visible at a glance. Click one to edit below. */}
+      <div className="grid grid-cols-2 gap-1.5 p-3 sm:grid-cols-3 xl:grid-cols-4">
+        {effectiveStates.map((st) => {
+          const open = openStep === st.step.id;
+          const tone = st.gap
+            ? 'border-red-300 bg-red-50'
+            : st.done
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-neutral-200 bg-white hover:bg-neutral-50';
           return (
-            <div
-              key={step.id}
-              className={`rounded-lg border transition ${
-                gap ? 'border-red-300 bg-red-50/50' : done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
-              }`}
+            <button
+              key={st.step.id}
+              type="button"
+              onClick={() => setOpenStep(open ? null : st.step.id)}
+              aria-expanded={open}
+              title={`${st.step.label} — ${st.step.hint}`}
+              className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs font-semibold transition ${tone} ${open ? 'ring-2 ring-[#efb70c]' : ''}`}
             >
-              <button
-                type="button"
-                onClick={() => setOpenStep(open ? null : step.id)}
-                className="flex min-h-16 w-full items-start gap-2 p-2 text-left"
-                aria-expanded={open}
-              >
-                <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs font-black ${
-                  done
-                    ? 'border-emerald-600 bg-emerald-600 text-white'
-                    : gap
-                      ? 'border-red-500 bg-red-500 text-white'
-                      : 'border-neutral-300 bg-white text-transparent'
-                }`}>
-                  {gap && !done ? '!' : '✓'}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-bold text-neutral-950">{step.label}{overridden ? <span className="ml-1 text-[10px] font-semibold text-neutral-400">(staff)</span> : null}</span>
-                  <span className="mt-0.5 block truncate text-xs text-neutral-600">{gap ? 'Gap — a later step is done but this one isn’t' : summary}</span>
-                </span>
-              </button>
-
-              <div className={`${open ? 'block' : 'hidden'} space-y-2 border-t border-neutral-200 p-2`}>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Step</span>
-                    <button type="button" onClick={() => { const initials = promptInitials(); if (initials) onToggleStep(record, step, 'done', initials); }} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
-                    <button type="button" onClick={() => { const initials = promptInitials(); if (initials) onToggleStep(record, step, 'pending', initials); }} className="h-7 rounded-md bg-amber-500 px-2 text-[11px] font-semibold text-white">Not done</button>
-                    <button type="button" onClick={() => onToggleStep(record, step, 'auto', rememberedInitials())} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700">Auto</button>
-                  </div>
-                  {primary ? (
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Linked status</span>
-                        <StatusChip item={primary} override={statusOverrides[primary.id]} onCommit={onCommit} />
-                      </div>
-                      {facts.length ? (
-                        <div className="grid gap-1">
-                          {facts.map((fact) => (
-                            <div key={`${step.id}-${fact.label}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
-                              <span className="font-semibold text-neutral-500">{fact.label}: </span>
-                              <span className="text-neutral-900">{fact.value}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      <EditableField label="Staff note" value={primary.detail} itemId={primary.id} field="detail" multiline onUpdate={onUpdate} />
-                      {detailItems.length ? (
-                        <div className="space-y-1">
-                          {detailItems.map((item) => (
-                            <div key={item.id} className="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-2 py-1 text-xs">
-                              <span className="min-w-0 truncate font-semibold text-neutral-700">
-                                {isServerMediaItem(item) ? item.sourceRef ?? item.label : item.source}
-                              </span>
-                              <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="rounded-md bg-neutral-50 px-2 py-2 text-xs text-neutral-500">
-                      No linked dashboard item was found for this stage yet.
-                    </div>
-                  )}
-                </div>
-            </div>
+              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[9px] ${
+                st.done ? 'border-emerald-600 bg-emerald-600 text-white' : st.gap ? 'border-red-500 bg-red-500 text-white' : 'border-neutral-400 bg-white text-neutral-300'
+              }`}>{st.gap && !st.done ? '!' : '✓'}</span>
+              <span className="min-w-0 flex-1 truncate text-neutral-900">{st.step.gridLabel}</span>
+              {st.overridden ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#a77d00]" title="Staff override" /> : null}
+            </button>
           );
         })}
       </div>
+      {openStepDef ? (
+        <div className="space-y-2 border-t border-neutral-200 p-3">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-sm font-bold text-neutral-900">{openStepDef.label}</span>
+            <span className="text-[10px] font-semibold text-neutral-400">{openState?.overridden ? 'staff-set' : 'auto'}</span>
+            <button type="button" onClick={() => { const i = promptInitials(); if (i) onToggleStep(record, openStepDef, 'done', i); }} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
+            <button type="button" onClick={() => { const i = promptInitials(); if (i) onToggleStep(record, openStepDef, 'pending', i); }} className="h-7 rounded-md bg-amber-500 px-2 text-[11px] font-semibold text-white">Not done</button>
+            {openState?.overridden ? <button type="button" onClick={() => { const i = promptInitials(); if (i) onToggleStep(record, openStepDef, 'auto', i); }} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700">Revert to auto</button> : null}
+          </div>
+          {openPrimary ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Linked status</span>
+                <StatusChip item={openPrimary} override={statusOverrides[openPrimary.id]} onCommit={onCommit} />
+              </div>
+              {openFacts.length ? (
+                <div className="grid gap-1 sm:grid-cols-2">
+                  {openFacts.map((fact) => (
+                    <div key={`${openStepDef.id}-${fact.label}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
+                      <span className="font-semibold text-neutral-500">{fact.label}: </span>
+                      <span className="text-neutral-900">{fact.value}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <EditableField label="Staff note" value={openPrimary.detail} itemId={openPrimary.id} field="detail" multiline onUpdate={onUpdate} />
+              {openDetailItems.length ? (
+                <div className="grid gap-1 sm:grid-cols-2">
+                  {openDetailItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-2 rounded-md bg-neutral-50 px-2 py-1 text-xs">
+                      <span className="min-w-0 truncate font-semibold text-neutral-700">{isServerMediaItem(item) ? item.sourceRef ?? item.label : item.source}</span>
+                      <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="rounded-md bg-neutral-50 px-2 py-2 text-xs text-neutral-500">No linked dashboard item was found for this stage yet.</div>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1861,7 +1863,15 @@ function DetailDrawer({
     window.setTimeout(() => closeButton?.focus(), 0);
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onCloseRef.current();
+      if (event.key === 'Escape') {
+        // Let a nested editor/menu cancel itself first: if a field is focused or a
+        // popover menu is open, don't close the whole drawer.
+        const active = document.activeElement as HTMLElement | null;
+        const inField = active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+        const menuOpen = Boolean(document.querySelector('[role="dialog"] [role="menu"], [role="dialog"] [role="dialog"]'));
+        if (!inField && !menuOpen) onCloseRef.current();
+        return;
+      }
       if (event.key !== 'Tab') return;
 
       const drawer = closeButtonRef.current?.closest('[role="dialog"]');
@@ -1917,33 +1927,28 @@ function DetailDrawer({
         {/* No page scroll: fixed-height body. Primary editables (Schedule + Status) are
             always visible; secondary sections are collapsed boxes that expand in place and
             scroll only inside themselves when opened on a large case. */}
-        <div className="flex h-[calc(100dvh-73px)] flex-col gap-3 overflow-hidden p-3">
+        <div className="flex h-[calc(100dvh-73px)] flex-col overflow-hidden">
           {detailLoading ? (
-            <div className="shrink-0 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
+            <div className="mx-3 mt-3 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
               Loading all linked rows and files for this family.
             </div>
           ) : null}
-          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-3">
-            {/* Primary: editable schedule + status (always open) */}
-            <div className="flex min-h-0 flex-col gap-3 lg:col-span-2">
-              <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
-              <div className="min-h-0 flex-1 overflow-auto">
-                <WorkflowChecklist
-                  record={record}
-                  statusOverrides={statusOverrides}
-                  workflowOverrides={workflowOverrides}
-                  onCommit={onCommit}
-                  onUpdate={onUpdate}
-                  onToggleStep={onToggleStep}
-                />
-              </div>
-            </div>
+          {/* ONE primary scroll for the whole drawer. Collapsible sections expand inline. */}
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
+            <WorkflowChecklist
+              record={record}
+              statusOverrides={statusOverrides}
+              workflowOverrides={workflowOverrides}
+              onCommit={onCommit}
+              onUpdate={onUpdate}
+              onToggleStep={onToggleStep}
+            />
 
-            {/* Secondary: collapsible boxes (expand in place; only this column ever scrolls) */}
-            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+            <div className="space-y-3">
               <details open className="shrink-0 rounded-lg border border-neutral-200">
                 <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</summary>
-                <div className="max-h-56 divide-y divide-neutral-100 overflow-auto border-t border-neutral-200">
+                <div className="divide-y divide-neutral-100 border-t border-neutral-200">
                   {(() => {
                     const caseAudit = auditEntries
                       .filter((entry) => record.items.some((item) => item.id === entry.itemId) || entry.itemId.startsWith(`${record.key}:`))
@@ -1969,7 +1974,7 @@ function DetailDrawer({
 
               <details className="shrink-0 rounded-lg border border-neutral-200">
                 <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Source details (read-only)</summary>
-                <div className="max-h-72 space-y-2 overflow-auto border-t border-neutral-200 p-2">
+                <div className="space-y-2 border-t border-neutral-200 p-2">
                   {[
                     { t: 'Dates & times', e: record.dateEntries, empty: 'No date or time values found.' },
                     { t: 'Locations', e: record.locationEntries, empty: 'No location values found.' },
@@ -1994,7 +1999,7 @@ function DetailDrawer({
 
               <details className="flex min-h-0 flex-col rounded-lg border border-neutral-200">
                 <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Related work ({record.items.length})</summary>
-                <div className="max-h-[60vh] divide-y divide-neutral-100 overflow-auto border-t border-neutral-200">
+                <div className="divide-y divide-neutral-100 border-t border-neutral-200">
               {record.items.map((item) => (
                 <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
                   <div className="min-w-0">
@@ -2212,6 +2217,18 @@ export default function BoardPage() {
           };
         }
         setWorkflowOverrides(next);
+        const stepLabel = (id: string) => familyWorkflow.find((s) => s.id === id)?.label ?? id;
+        const audit: AuditEntry[] = response.audit.map((a) => ({
+          kind: 'status',
+          itemId: `${a.case_key}:${a.step_id}`,
+          label: `${a.case_name || ''} — ${stepLabel(a.step_id)}`,
+          fieldName: stepLabel(a.step_id),
+          from: a.old_state ?? 'auto',
+          to: a.new_state,
+          initials: a.staff_initials,
+          changedAt: a.created_at,
+        }));
+        setAuditEntries((prev) => mergeAudit(audit, prev));
       })
       .catch(() => {
         setWorkflowOverrides({});
@@ -2231,6 +2248,18 @@ export default function BoardPage() {
           };
         }
         setMilestoneOverrides(next);
+        const msLabel = (key: string) => ALL_MILESTONES.find((m) => m.key === key)?.full ?? key;
+        const audit: AuditEntry[] = response.audit.map((a) => ({
+          kind: 'status',
+          itemId: `${a.case_key}:${a.milestone_key}`,
+          label: `${a.case_name || ''} — ${msLabel(a.milestone_key)}`,
+          fieldName: msLabel(a.milestone_key),
+          from: a.old_value ?? 'source',
+          to: a.new_value,
+          initials: a.staff_initials,
+          changedAt: a.created_at,
+        }));
+        setAuditEntries((prev) => mergeAudit(audit, prev));
       })
       .catch(() => {
         setMilestoneOverrides({});
@@ -2280,6 +2309,7 @@ export default function BoardPage() {
         kind: 'status',
         itemId: `${record.key}:${step.id}`,
         label: `${record.name} — ${step.label}`,
+        fieldName: step.label,
         from: saved.audit.old_state ?? 'auto',
         to: saved.audit.new_state,
         initials: saved.audit.staff_initials,
@@ -2315,6 +2345,7 @@ export default function BoardPage() {
         kind: 'status',
         itemId: `${record.key}:${def.key}`,
         label: `${record.name} — ${def.full}`,
+        fieldName: def.full,
         from: audit.old_value ?? 'source',
         to: audit.new_value,
         initials: audit.staff_initials,
