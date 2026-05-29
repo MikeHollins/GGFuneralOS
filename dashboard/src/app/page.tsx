@@ -889,7 +889,14 @@ function milestoneSearchText(record: CaseRecord, overrides: MilestoneOverrideMap
     .join(' ');
 }
 
-// Compact grid display: one labeled micro-row per populated/N/A milestone; empties hidden.
+function milestoneCellTone(state: MilestoneState) {
+  if (state.state === 'empty') return 'border-amber-200 bg-amber-50 text-amber-900';
+  if (state.state === 'na') return 'border-neutral-200 bg-neutral-50 text-neutral-500';
+  if (state.overridden) return 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950';
+  return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+}
+
+// Compact grid display: every expected milestone slot is visible, with source/staff/N/A/pending state.
 function MilestoneChips({
   record,
   defs,
@@ -901,30 +908,28 @@ function MilestoneChips({
   overrides: MilestoneOverrideMap;
   onOpen: () => void;
 }) {
-  const states = defs.map((def) => effectiveMilestone(record, def, overrides)).filter((state) => state.state !== 'empty');
+  const states = defs.map((def) => effectiveMilestone(record, def, overrides));
   return (
-    <button
-      type="button"
-      onClick={onOpen}
+    <div
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
       title="Open case to edit scheduling & locations"
-      className="block w-full rounded-md px-1 py-1 text-left text-[11px] leading-tight outline-none transition hover:bg-neutral-100 focus:bg-[#fff7d7]"
+      className={`grid w-full gap-1 px-1 py-1 text-[10px] leading-tight ${defs.length > 3 ? 'grid-cols-2' : 'grid-cols-1 2xl:grid-cols-3'}`}
     >
-      {states.length ? (
-        <div className="flex flex-col gap-0.5">
-          {states.map((state) => (
-            <span key={state.def.key} className="truncate">
-              <span className="text-neutral-400">{state.def.label}: </span>
-              <span className={state.state === 'na' ? 'italic text-neutral-400' : 'font-semibold text-neutral-800'}>
-                {state.state === 'na' ? 'N/A' : state.value}
-              </span>
-              {state.overridden ? <span className="text-[#a77d00]" title="Staff override"> •</span> : null}
-            </span>
-          ))}
+      {states.map((state) => (
+        <div
+          key={state.def.key}
+          className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${milestoneCellTone(state)}`}
+        >
+          <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{state.def.label}</div>
+          <div className={`truncate ${state.state === 'empty' || state.state === 'na' ? 'italic' : ''}`}>
+            {state.state === 'empty' ? 'Pending' : state.state === 'na' ? 'N/A' : state.value}
+          </div>
         </div>
-      ) : (
-        <span className="text-neutral-400">—</span>
-      )}
-    </button>
+      ))}
+    </div>
   );
 }
 
@@ -1779,15 +1784,23 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
 }
 
 function FamilyContactCell({ record, overrides }: { record: CaseRecord; overrides: ContactOverrideMap }) {
-  const contact = contactGridText(effectiveFamilyContact(record, overrides));
+  const effective = effectiveFamilyContact(record, overrides);
+  const contact = contactGridText(effective);
   if (!contact) {
-    return <span className="font-normal italic text-neutral-400">No contact on file</span>;
+    const hasCandidate = record.contactCandidates.length > 0;
+    return (
+      <div className={`rounded-md border px-2 py-1 text-xs font-semibold ${hasCandidate ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+        <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{hasCandidate ? 'Candidate found' : 'Needed'}</div>
+        <div className="truncate">{hasCandidate ? record.contactCandidates[0].name : 'No contact on file'}</div>
+      </div>
+    );
   }
   return (
-    <span className="block min-w-0">
-      <span className="block truncate font-bold text-neutral-800">{contact.primary}</span>
-      {contact.secondary ? <span className="block truncate text-[11px] font-normal text-neutral-500">{contact.secondary}</span> : null}
-    </span>
+    <div className={`rounded-md border px-2 py-1 text-xs font-semibold ${effective?.overridden ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+      <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{effective?.overridden ? 'Staff contact' : 'Source contact'}</div>
+      <div className="truncate">{contact.primary}</div>
+      {contact.secondary ? <div className="truncate text-[10px] font-normal opacity-80">{contact.secondary}</div> : null}
+    </div>
   );
 }
 
