@@ -82,6 +82,7 @@ type CaseRecord = {
   dateOfBirth: string | null;
   dateOfTransition: string | null;
   sourceCaseNumbers: string[];
+  identityStatus: string;
   blocker: string;
   updatedAt: string;
   areaCounts: Partial<Record<OperationArea, number>>;
@@ -597,6 +598,28 @@ function itemName(item: DashboardItem) {
     cleanDisplay(item.label) ||
     'Unknown'
   );
+}
+
+// Confidence of the canonical case identity, resolved in the sync (master-sheet-sync.ts).
+// A group's status is its LOWEST-confidence row, so staff see the weakest link. `unverified`
+// means the resolver could not place the case to a year (needs director review); `date-bridged`
+// means it was placed by activity-date, not its own case number (lower confidence).
+const IDENTITY_STATUS_RANK = ['unverified', 'name-only', 'date-bridged', 'date-year', 'bridged', 'resolved'];
+
+function pickIdentityStatus(items: DashboardItem[]) {
+  let worst = '';
+  let worstRank = Infinity;
+  for (const item of items) {
+    const status = cleanDisplay(sourcePayload(item).identity_status);
+    if (!status) continue;
+    const rank = IDENTITY_STATUS_RANK.indexOf(status);
+    const effectiveRank = rank === -1 ? IDENTITY_STATUS_RANK.length : rank;
+    if (effectiveRank < worstRank) {
+      worstRank = effectiveRank;
+      worst = status;
+    }
+  }
+  return worst;
 }
 
 function caseKeyForItem(item: DashboardItem) {
@@ -1594,6 +1617,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     const dateOfBirth = sourceDateOfBirth(sortedItems);
     const dateOfTransition = sourceDateOfTransition(sortedItems);
     const sourceCaseNumbers = sourceCaseNumbersFor(sortedItems);
+    const identityStatus = pickIdentityStatus(sortedItems);
 
     const record: CaseRecord = {
       key,
@@ -1612,6 +1636,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       dateOfBirth,
       dateOfTransition,
       sourceCaseNumbers,
+      identityStatus,
       blocker: blockerFor(sortedItems),
       updatedAt: lastUpdatedFor(sortedItems, auditEntries),
       areaCounts,
@@ -2895,7 +2920,32 @@ function DetailDrawer({
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">Family detail</div>
               <h2 className="mt-1 truncate text-xl font-bold text-neutral-950">{record.name}</h2>
-              <div className="mt-1 text-xs text-neutral-500">{record.items.length} related source rows and files</div>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                <span>{record.items.length} related source rows and files</span>
+                {record.sourceCaseNumbers.length > 0 && (
+                  <span
+                    className="rounded border border-neutral-200 px-1.5 py-0.5 font-mono text-[11px] text-neutral-600"
+                    title="Golden Gate per-register case number (not a global ID)"
+                  >
+                    {record.sourceCaseNumbers.length > 1
+                      ? `Case ${record.sourceCaseNumbers[0]} +${record.sourceCaseNumbers.length - 1}`
+                      : `Case ${record.sourceCaseNumbers[0]}`}
+                  </span>
+                )}
+                {record.identityStatus === 'unverified' && (
+                  <span className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-800">
+                    Unverified identity — review
+                  </span>
+                )}
+                {record.identityStatus === 'date-bridged' && (
+                  <span
+                    className="rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-medium text-neutral-600"
+                    title="Year matched by activity date, not this case's own number — lower confidence"
+                  >
+                    Date-matched year
+                  </span>
+                )}
+              </div>
             </div>
             <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
               Close

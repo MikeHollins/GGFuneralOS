@@ -7,6 +7,47 @@
 
 **Mission behind the mission (the goal behind the goal):** *Single-entry automation* — a deceased's and family's information is captured **once** at first contact and flows through arrangement → death-cert filing → cremation/burial → production → payment → closeout **without human re-keying**, while Missouri compliance deadlines enforce themselves and grieving families are never contacted by the wrong channel or at the wrong time.
 
+## North Star & architecture pillars (owner directives, 2026-05-29)
+
+**Strategy:** Operate in the *background* of the live funeral home — read their data, optimize it in our Neon, build automated workflows — so they eventually **migrate off their system onto our OS by choice**. Trust is existential: one write that touches their live OS (sheet/server/SMB mount) = immediate failure. Every action is gold-standard AND provably non-invasive to their side.
+
+**Acceptance bar:** Our dashboard must be **at least as functional as their Google Sheet** for running funeral operations and viewing data — then enhanced. Parity first, then automation.
+
+**Ingestion vision:** Sync *all* reliable sources and **wake our parser whenever a source changes** (event-driven ingestion), so new data is parsed + inserted automatically. Eventually their **email and their entire server** become inputs our OS auto-categorizes for future workflows.
+
+**CRITICAL non-invasive constraint (gold-standard + read-only boundary):** We **cannot** install true push-hooks/triggers on their Google Sheet — an Apps Script trigger or Drive webhook on *their* file would modify their side and violate the boundary. So "wake on update" must be achieved by **non-invasive change detection we own**:
+- A scheduled poller (Vercel Cron / scheduled function) checks the sheet's Drive `modifiedTime`/revision cheaply; only on change does it run a full parse.
+- We *already* compute a per-row `content_hash` in the staging layer (`source_sheet_rows`) — so we can diff and parse only changed rows.
+- Same pattern generalizes to email (poll IMAP/Gmail API read-only) and the server/SMB (read-only metadata diff). The trigger logic lives entirely on *our* side; their systems are only ever read.
+
+## Completion dossier — verified 2026-05-29 (workflow `wf_2b8043bd-726`, 10 agents, adversarially verified)
+
+Full output: `tasks/wr9g1wq4j.output`. Highlights:
+
+**Verified metric definitions (use these exact predicates):**
+- *2026 Golden Gate numbered records* = distinct `(source, source_case_number)` where `source_case_number LIKE '26%'` → **2,041** (1,494 `26-NNN` + 547 `26-NNNN`). Use the loose `LIKE`, not a strict 3-digit regex.
+- *2026 canonical name-year cases* = distinct `case_group_key LIKE '%|2026'` with `source_case_number IS NOT NULL` → **1,650** (a strict `NN-NNN` regex wrongly yields 1,130 by dropping 4-digit sequences).
+- *May 2026 activity groups* = distinct `case_group_key` with `business_date` in 2026-05 → **145** (not 146).
+- *Data-quality:* 4 distinct `source_case_number` decode to impossible future years (`34-175`→2034, `32-328/373/395`→2032). Add a validation flag for prefixes > current_year+1.
+
+**DOB/DOD source ranking (post-adversarial verification) — no reliable source exists:**
+1. Operational_items Neon capture (intake) — the authoritative *path*, but 0/15,588 populated today.
+2. Public obituary site (Tukios) — **REFUTED as primary**: fail-open (bad slugs → HTTP 200 + stray date), non-enumerable (no sitemap URLs), header-vs-body DOD disagreement, opt-in + lagging. Usable only as read-only cross-check of already-public cases, never overwriting Neon, fail-closed.
+3. Legacy `cases` — **REFUTED**: 3 test rows ("Test Case", "are real"), 8 weeks stale.
+4. SMB `source_file_items` — programs only, names no dates.
+5. Connected Google Drive — **wrong account** (personal/MyProof, zero funeral docs); correct Golden Gate Workspace not connected.
+
+→ **Manual DOD capture at intake remains the fail-closed authority for the MoEVR 5-day deadline.**
+
+**Functional parity gaps (dashboard vs their sheet), ranked:**
+- *BLOCKER:* (1) sheet write-back — the intentional read-only boundary; GATED by design. (2) No create-case/add-row path (only groups already-synced rows).
+- *HIGH (viewing, safe to build):* board is hard-coded alphabetical (`page.tsx:3449`), no column sort; silent 200-row client cap + 250/area server cap, no pagination; no per-register/per-year views; no status/state filters.
+- *HIGH (editing, needs product decision):* capture arbitrary per-row fields (only 6 editable today); time-of-day scheduling (date-only); editable service crew/logistics; belongings inventory.
+- *MEDIUM:* structured release/chain-of-custody events, ad-hoc tasks, append-only note log, per-register counts, times on board.
+- *Dashboard already at/above parity:* initials-gated audited status, DOD capture, source-row provenance, SSN masked to last-4 (deliberate).
+
+**Plan status:** DONE = identity layer (resolver + grouping + date-bridge), verified metrics, source landscape. READY-TO-BUILD (our-side-only) = data-quality flag, identity-quality UI, viewing-parity (sort/pagination/per-register/filters), create/edit-in-Neon, obituary read-only cross-check. GATED (director review + sandbox) = all family-facing (Twilio/SMS/email/auto-publish), sheet write-back, Drive ingestion (needs correct account).
+
 ## Governing rules
 
 Fail-closed on every compliance deadline; never substitute a "nearby" variable for a legal date (§7/§9/§10). Auto-publishing and any family-facing send stay gated behind director approval. Read-only sources (Google sheet, SMB, Gmail, Calendar) are **never** written back to — all staff-authored truth lives in Neon override tables, preserved across re-sync via `edited_fields`. One canonical implementation for case identity and deadline math (§13).
