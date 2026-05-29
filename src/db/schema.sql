@@ -344,6 +344,43 @@ CREATE INDEX idx_operational_items_source_origin ON operational_items(source_ori
 CREATE INDEX idx_operational_items_source_ref ON operational_items(source_origin, source_ref) WHERE is_archived = false;
 CREATE INDEX idx_operational_items_business_date ON operational_items(business_date DESC NULLS LAST, created_at DESC) WHERE is_archived = false;
 
+/* Read-only Google master sheet staging. The dashboard materializes operational_items from
+   this copy so parser mistakes, moved rows, and partial syncs can be audited and replayed
+   without writing back to the source spreadsheet. */
+CREATE TABLE source_sheet_sync_runs (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  spreadsheet_id    TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'running',
+  read_sheets       JSONB NOT NULL DEFAULT '[]',
+  raw_row_count     INTEGER NOT NULL DEFAULT 0,
+  parsed_item_count INTEGER NOT NULL DEFAULT 0,
+  archived_row_count INTEGER NOT NULL DEFAULT 0,
+  error_message     TEXT,
+  started_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at       TIMESTAMPTZ
+);
+
+CREATE TABLE source_sheet_rows (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  spreadsheet_id    TEXT NOT NULL,
+  sheet_name        TEXT NOT NULL,
+  source_ref        TEXT NOT NULL,
+  row_number        INTEGER,
+  row_values        JSONB NOT NULL DEFAULT '[]',
+  content_hash      TEXT NOT NULL,
+  first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  seen_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sync_run_id  UUID REFERENCES source_sheet_sync_runs(id) ON DELETE SET NULL,
+  parse_status      TEXT NOT NULL DEFAULT 'raw',
+  parse_message     TEXT,
+  is_archived       BOOLEAN NOT NULL DEFAULT false,
+  UNIQUE (spreadsheet_id, source_ref)
+);
+
+CREATE INDEX idx_source_sheet_rows_sheet ON source_sheet_rows(spreadsheet_id, sheet_name, is_archived);
+CREATE INDEX idx_source_sheet_rows_sync ON source_sheet_rows(last_sync_run_id);
+CREATE INDEX idx_source_sheet_runs_started ON source_sheet_sync_runs(started_at DESC);
+
 -- Durable per-family workflow checklist override (absence of a row = auto-derived).
 CREATE TABLE case_workflow_state (
   case_key       TEXT NOT NULL,

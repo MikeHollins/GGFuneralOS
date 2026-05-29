@@ -79,6 +79,13 @@ export const saveWorkflowState = (data: {
 export const getMilestones = () =>
   apiFetch<{ data: CaseMilestone[]; audit: CaseMilestoneAudit[] }>('/dashboard/milestones');
 
+export const getGoogleCalendarEvents = (start: string, end: string) =>
+  apiFetch<{
+    configured: boolean;
+    calendar_url: string;
+    events: GoogleCalendarEvent[];
+  }>(`/dashboard/google-calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+
 export const saveMilestone = (data: {
   case_key: string;
   case_name: string;
@@ -110,11 +117,13 @@ export const saveDashboardCaseContact = (data: {
     { method: 'POST', body: JSON.stringify(data) },
   );
 
-export const syncWeeklyServiceSchedule = () =>
-  apiFetch<{ data: { imported: number; source: string } }>(
-    '/dashboard/sync/weekly-service',
+export const syncMasterSheet = () =>
+  apiFetch<{ data: { imported: number; raw_rows: number; sync_run_id: string; source: string } }>(
+    '/dashboard/sync/master-sheet',
     { method: 'POST', body: '{}' }
   );
+
+export const syncWeeklyServiceSchedule = syncMasterSheet;
 
 export const saveOperationalStatus = (data: {
   item_id: string;
@@ -191,6 +200,20 @@ export interface Case {
   tasks_total?: number;
   tasks_overdue?: number;
   [key: string]: any;
+}
+
+export interface GoogleCalendarEvent {
+  id: string;
+  calendarId: string;
+  calendarName: string;
+  title: string;
+  description: string;
+  location: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  htmlLink: string;
+  source: 'google-calendar';
 }
 
 export interface CaseDetail extends Case {
