@@ -324,14 +324,6 @@ function cleanArrangementCell(value: string) {
   return withoutBlockPrefix;
 }
 
-function displayHeader(key: string) {
-  return key
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
 function looksLikeDateOrTime(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return false;
@@ -455,50 +447,81 @@ function recordToItem(record: Record<string, string>, config: SheetConfig): Dash
   };
 }
 
-function arrangementItems(record: Record<string, string>, config: SheetConfig) {
-  const time = first(record, ['time']);
+function cleanDayLabel(value: string) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+// The Arrangements tab is a weekly CALENDAR GRID, not a flat table:
+//   row 0  = day headers ("Monday 5-25-26 CLOSED HOLIDAY", "Tuesday May 26", ...)
+//   col 0  = time slots ("9:00 AM")
+//   cells  = "BLOCK" / "LUNCH" / "" or real arrangements ("Bowens-Direct",
+//            "Preneed-Tilley;Isley-Direct" — multiple per cell, ';'-separated)
+// The generic findHeaderRow() mis-picked the first BLOCK row as the header, so every
+// real arrangement was discarded (0 imported). This parser reads the grid directly.
+function arrangementCalendarEntries(rows: string[][], config: SheetConfig) {
   const entries: Array<{ record: Record<string, string>; item: DashboardItem; sourceRef: string }> = [];
-  const skipKeys = new Set(['_row_number', 'time', 'block']);
+  if (!rows.length) return entries;
 
-  for (const [key, value] of Object.entries(record)) {
-    if (skipKeys.has(key) || key.startsWith('column_')) continue;
-    const label = cleanArrangementCell(value);
-    if (!label) continue;
+  const weekday = /\b(mon|tue|wed|thu|fri|sat|sun)/i;
+  const headerIdx = rows.findIndex((row) => row.filter((cell) => weekday.test(String(cell ?? ''))).length >= 2);
+  if (headerIdx < 0) return entries;
 
-    const dayLabel = displayHeader(key);
-    const rowNumber = record._row_number;
-    const due = compact([dayLabel, time]);
-    const payload = {
-      ...record,
-      appointment_column: key,
-      appointment_day: dayLabel,
-      appointment_time: time,
-      appointment_label: label,
-    };
+  const header = rows[headerIdx].map((cell) => cleanDayLabel(String(cell ?? '')));
+  const dayColumns = header
+    .map((label, index) => ({ index, label }))
+    .filter((column) => column.index > 0 && column.label);
 
-    entries.push({
-      record: payload,
-      sourceRef: `${config.sheet}!${rowNumber}:${key}`,
-      item: {
-        id: `sheet-${slug(config.sheet)}-${rowNumber}-${slug(key)}`,
-        area: config.area,
-        label,
-        detail: detailFor(payload, config),
-        owner: config.defaultOwner,
-        due,
-        source: config.sheet,
-        status: config.defaultStatus,
-        priority: due ? 'high' : 'normal',
-        options: optionsFor(config.area),
-      },
-    });
+  for (let rowIdx = headerIdx + 1; rowIdx < rows.length; rowIdx += 1) {
+    const row = rows[rowIdx] || [];
+    const timeCell = cleanDayLabel(String(row[0] ?? ''));
+    const time = isTimeLike(timeCell) ? timeCell : '';
+
+    for (const column of dayColumns) {
+      const cell = String(row[column.index] ?? '').trim();
+      if (!cell) continue;
+
+      cell.split(/[;\n]+/).forEach((part) => {
+        const label = cleanArrangementCell(part);
+        if (!label) return;
+
+        const due = compact([column.label, time]);
+        // Keyed by day-date + time + the arrangement name, so each arrangement is a
+        // distinct stable row, and a new week's schedule produces new items while last
+        // week's arrangements archive out (they leave activeSourceRefs). Keying by cell
+        // position instead would collide across stacked week-blocks that reuse times.
+        const key = `${slug(column.label)}-${slug(timeCell)}-${slug(label)}`;
+        const record: Record<string, string> = {
+          _row_number: String(headerIdx + rowIdx + 1),
+          day: column.label,
+          time: timeCell,
+          appointment_label: label,
+          raw_cell: cell,
+        };
+
+        entries.push({
+          record,
+          sourceRef: `${config.sheet}!${key}`,
+          item: {
+            id: `sheet-${slug(config.sheet)}-${key}`,
+            area: config.area,
+            label,
+            detail: compact([column.label, time ? `at ${time}` : '']) || config.sheet,
+            owner: config.defaultOwner,
+            due,
+            source: config.sheet,
+            status: config.defaultStatus,
+            priority: due ? 'high' : 'normal',
+            options: optionsFor(config.area),
+          },
+        });
+      });
+    }
   }
 
   return entries;
 }
 
 function recordToItemEntries(record: Record<string, string>, config: SheetConfig) {
-  if (config.sheet.toLowerCase() === 'arrangements') return arrangementItems(record, config);
   const item = recordToItem(record, config);
   return item ? [{ record, item, sourceRef: `${item.source}!${record._row_number}` }] : [];
 }
@@ -643,8 +666,10 @@ export async function syncWeeklyServiceSchedule() {
   for (let index = 0; index < configs.length; index += 1) {
     const config = configs[index];
     const rows = response.valueRanges?.[index]?.values ?? [];
-    const records = rowsToRecords(rows);
-    const items = records.flatMap((record) => recordToItemEntries(record, config));
+    const items =
+      normalizeHeader(config.sheet) === 'arrangements'
+        ? arrangementCalendarEntries(rows, config)
+        : rowsToRecords(rows).flatMap((record) => recordToItemEntries(record, config));
 
     importedBySheet[config.sheet] = items.length;
     for (const entry of items) {
