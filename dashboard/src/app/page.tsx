@@ -389,8 +389,12 @@ function parseOperationalDate(value: unknown) {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  // No unguarded `new Date(text)` fallback: JS Date.parse is locale/heuristic-driven
+  // and will silently coerce ambiguous or garbled strings (a lone year, "March", a
+  // mis-ordered MM/DD) into a wrong date, which then mis-buckets a case into/out of the
+  // active window. Anything not matched by the explicit formats above is treated as
+  // "no date" (null) rather than guessed.
+  return null;
 }
 
 function itemBusinessDates(item: DashboardItem) {
@@ -403,19 +407,16 @@ function itemBusinessDates(item: DashboardItem) {
     .filter((date): date is Date => Boolean(date));
 }
 
-function itemOperationalDates(item: DashboardItem) {
-  const businessDates = itemBusinessDates(item);
-  if (businessDates.length) return businessDates;
-
-  const createdAt = parseOperationalDate(item.createdAt);
-  return createdAt ? [createdAt] : [];
-}
-
 function recordIsActive(record: CaseRecord) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - activeCaseWindowDays);
   cutoff.setHours(0, 0, 0, 0);
-  return record.items.some((item) => itemOperationalDates(item).some((date) => date >= cutoff));
+  // Active requires at least one REAL business date within the window. Rows with no
+  // parseable date are treated as unknown (not active) rather than falling back to the
+  // DB sync timestamp (item.createdAt), which is refreshed to now() on every re-sync and
+  // therefore always "recent" — that fallback kept every undated/closed case (e.g. a 2024
+  // belongings row) permanently on the primary board.
+  return record.items.some((item) => itemBusinessDates(item).some((date) => date >= cutoff));
 }
 
 function recordHasTodayWork(record: CaseRecord, statusOverrides: Record<string, StatusOverride>) {
