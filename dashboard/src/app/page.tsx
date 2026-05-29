@@ -3,9 +3,11 @@
 import Link from 'next/link';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
+  getMilestones,
   getOperationalStatuses,
   getOperationsFeed,
   getWorkflowStates,
+  saveMilestone,
   saveOperationalStatus,
   saveWorkflowState,
   syncWeeklyServiceSchedule,
@@ -145,6 +147,26 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
   { label: 'Doctor / facility', keys: ['doctor', 'physician', 'certifier', 'facility', 'place_of_death_facility'] },
   { label: 'Server folder', keys: ['top_level', 'parent_path', 'relative_path'] },
 ];
+
+// Structured scheduling/location milestones shown as compact grid slots and edited in the
+// drawer. Source-derived values are the default; staff overrides (incl. N/A) live in Neon.
+type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location'; sourceKeys: string[] };
+const DATE_MILESTONES: MilestoneDef[] = [
+  { key: 'first_call', label: 'Call', full: 'First call', kind: 'date', sourceKeys: ['first_call_date', 'first_call', 'date_received', 'received_date'] },
+  { key: 'service', label: 'Svc', full: 'Service', kind: 'date', sourceKeys: ['service_date', 'service_time', 'date', 'time'] },
+  { key: 'cremation', label: 'Crem', full: 'Cremation', kind: 'date', sourceKeys: ['cremation_date', 'date_of_cremation'] },
+  { key: 'burial', label: 'Burial', full: 'Burial', kind: 'date', sourceKeys: ['committal_date', 'committal_time'] },
+];
+const LOCATION_MILESTONES: MilestoneDef[] = [
+  { key: 'service_location', label: 'Svc', full: 'Service location', kind: 'location', sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
+  { key: 'cremation_location', label: 'Crem', full: 'Cremation location', kind: 'location', sourceKeys: ['crematory', 'crematory_name'] },
+  { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
+];
+const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES];
+
+type MilestoneOverride = { value: string; isNa: boolean; initials: string };
+type MilestoneOverrideMap = Record<string, Record<string, MilestoneOverride>>;
+type MilestoneState = { def: MilestoneDef; state: 'set' | 'na' | 'source' | 'empty'; value: string; overridden: boolean };
 
 const serviceStaffGroups: Array<{ label: string; keys: string[] }> = [
   { label: 'Lead', keys: ['lead'] },
@@ -586,6 +608,164 @@ function formatTransitionDate(raw: string) {
   const date = new Date(`${raw}T12:00:00`);
   if (Number.isNaN(date.getTime())) return raw;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// First non-empty source-derived value for a milestone, across the case's source rows.
+function sourceMilestoneValue(record: CaseRecord, sourceKeys: string[]) {
+  for (const item of record.items) {
+    const payload = sourcePayload(item);
+    for (const key of sourceKeys) {
+      const value = cleanDisplay(payload[key]);
+      if (value) return value;
+    }
+  }
+  return '';
+}
+
+// Effective milestone = staff override (value or N/A) ?? source-derived default ?? empty.
+function effectiveMilestone(record: CaseRecord, def: MilestoneDef, overrides: MilestoneOverrideMap): MilestoneState {
+  const override = overrides[record.key]?.[def.key];
+  if (override) {
+    if (override.isNa) return { def, state: 'na', value: '', overridden: true };
+    if (override.value) return { def, state: 'set', value: override.value, overridden: true };
+  }
+  const source = sourceMilestoneValue(record, def.sourceKeys);
+  if (source) return { def, state: 'source', value: source, overridden: false };
+  return { def, state: 'empty', value: '', overridden: false };
+}
+
+function milestoneSearchText(record: CaseRecord, overrides: MilestoneOverrideMap) {
+  return ALL_MILESTONES.map((def) => {
+    const state = effectiveMilestone(record, def, overrides);
+    return state.state === 'na' ? `${def.full} n/a` : state.value;
+  })
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Compact grid display: one labeled micro-row per populated/N/A milestone; empties hidden.
+function MilestoneChips({
+  record,
+  defs,
+  overrides,
+  onOpen,
+}: {
+  record: CaseRecord;
+  defs: MilestoneDef[];
+  overrides: MilestoneOverrideMap;
+  onOpen: () => void;
+}) {
+  const states = defs.map((def) => effectiveMilestone(record, def, overrides)).filter((state) => state.state !== 'empty');
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Open case to edit scheduling & locations"
+      className="block w-full rounded-md px-1 py-1 text-left text-[11px] leading-tight outline-none transition hover:bg-neutral-100 focus:bg-[#fff7d7]"
+    >
+      {states.length ? (
+        <div className="flex flex-col gap-0.5">
+          {states.map((state) => (
+            <span key={state.def.key} className="truncate">
+              <span className="text-neutral-400">{state.def.label}: </span>
+              <span className={state.state === 'na' ? 'italic text-neutral-400' : 'font-semibold text-neutral-800'}>
+                {state.state === 'na' ? 'N/A' : state.value}
+              </span>
+              {state.overridden ? <span className="text-[#a77d00]" title="Staff override"> •</span> : null}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="text-neutral-400">—</span>
+      )}
+    </button>
+  );
+}
+
+type CommitMilestone = (record: CaseRecord, def: MilestoneDef, value: string, isNa: boolean, initials: string) => Promise<void>;
+
+// One editable milestone field in the drawer: shows source default + staff override, with
+// inline edit, an N/A toggle, and a "use source" revert. Initials-gated on save.
+function MilestoneField({ record, def, overrides, onCommit }: { record: CaseRecord; def: MilestoneDef; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
+  const effective = effectiveMilestone(record, def, overrides);
+  const source = sourceMilestoneValue(record, def.sourceKeys);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  function begin() {
+    setDraft(effective.state === 'set' ? effective.value : '');
+    setError('');
+    setEditing(true);
+  }
+  async function run(value: string, isNa: boolean, needInitials: boolean) {
+    const initials = needInitials ? promptInitials() : rememberedInitials();
+    if (needInitials && !initials) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onCommit(record, def, value, isNa, initials);
+      setEditing(false);
+    } catch (err: any) {
+      setError(err?.message || 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" onClick={begin} className="block rounded-md bg-neutral-50 px-2 py-1.5 text-left text-xs transition hover:bg-[#fff7d7]">
+        <span className="block font-semibold text-neutral-500">
+          {def.full}
+          {effective.overridden ? (
+            <span className="ml-1 text-[10px] text-[#a77d00]">staff</span>
+          ) : source ? (
+            <span className="ml-1 text-[10px] text-neutral-400">source</span>
+          ) : null}
+        </span>
+        <span className={`block break-words ${effective.state === 'na' ? 'italic text-neutral-400' : effective.state === 'empty' ? 'text-neutral-400' : 'text-neutral-900'}`}>
+          {effective.state === 'na' ? 'N/A' : effective.state === 'empty' ? 'Set…' : effective.value}
+        </span>
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-md border border-[#efb70c]/40 bg-[#fffaf0] p-2 text-xs">
+      <div className="font-semibold text-neutral-500">{def.full}</div>
+      {source ? <div className="truncate text-[10px] text-neutral-400">Source: {source}</div> : null}
+      <input
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder={def.kind === 'date' ? 'e.g. Jun 3, 11a' : 'Location'}
+        className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+        autoFocus
+      />
+      <div className="mt-2 flex flex-wrap gap-1">
+        <button type="button" disabled={busy} onClick={() => run(draft, false, true)} className="h-7 rounded-md bg-black px-2 font-semibold text-[#efb70c] disabled:opacity-60">Save</button>
+        <button type="button" disabled={busy} onClick={() => run('', true, true)} className="h-7 rounded-md bg-neutral-200 px-2 font-semibold text-neutral-700 disabled:opacity-60">N/A</button>
+        {effective.overridden ? <button type="button" disabled={busy} onClick={() => run('', false, false)} className="h-7 rounded-md px-2 font-semibold text-neutral-500 hover:bg-neutral-100">Use source</button> : null}
+        <button type="button" onClick={() => setEditing(false)} className="h-7 rounded-md px-2 font-semibold text-neutral-500 hover:bg-neutral-100">Cancel</button>
+      </div>
+      {error ? <div className="mt-1 text-red-700">{error}</div> : null}
+    </div>
+  );
+}
+
+function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
+  return (
+    <section className="rounded-lg border border-neutral-200 bg-white">
+      <div className="border-b border-neutral-200 px-3 py-2">
+        <h3 className="text-sm font-bold text-neutral-950">Scheduling &amp; locations</h3>
+      </div>
+      <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-4">
+        {ALL_MILESTONES.map((def) => (
+          <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function blockerFor(items: DashboardItem[]) {
@@ -1640,73 +1820,30 @@ function WorkflowChecklist({
   );
 }
 
-function MenuCell({
-  label,
-  entries,
-}: {
-  label: string;
-  entries: MenuEntry[];
-}) {
-  const [open, setOpen] = useState(false);
-  const primary = entries[0];
-
-  return (
-    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen((value) => !value);
-        }}
-        className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-neutral-100"
-        aria-label={`${label} options`}
-      >
-        <span className="min-w-0">
-          <span className="block truncate font-semibold text-neutral-900">{primary?.label ?? 'None'}</span>
-          <span className="block truncate text-neutral-600">{primary?.value ?? 'No value found'}</span>
-        </span>
-        <span className="shrink-0 text-[10px] font-bold text-neutral-400">{entries.length > 1 ? `+${entries.length - 1}` : 'v'}</span>
-      </button>
-      {open ? (
-        <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl">
-          <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{label}</div>
-          <div className="max-h-72 overflow-auto">
-            {entries.length ? entries.map((entry, index) => (
-              <div key={`${entry.label}-${entry.value}-${index}`} className="rounded-md px-2 py-1.5 text-xs hover:bg-neutral-50">
-                <div className="font-semibold text-neutral-950">{entry.label}</div>
-                <div className="mt-0.5 break-words text-neutral-700">{entry.value}</div>
-                <div className="mt-0.5 text-[10px] text-neutral-400">{entry.source}</div>
-              </div>
-            )) : (
-              <div className="px-2 py-3 text-xs text-neutral-500">No related values were found.</div>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function DetailDrawer({
   record,
   statusOverrides,
   workflowOverrides,
+  milestoneOverrides,
   auditEntries,
   detailLoading,
   onClose,
   onCommit,
   onUpdate,
   onToggleStep,
+  onCommitMilestone,
 }: {
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
   workflowOverrides: WorkflowOverrideMap;
+  milestoneOverrides: MilestoneOverrideMap;
   auditEntries: AuditEntry[];
   detailLoading: boolean;
   onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
   onToggleStep: ToggleStep;
+  onCommitMilestone: CommitMilestone;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -1781,7 +1918,8 @@ function DetailDrawer({
               Loading all linked rows and files for this family.
             </div>
           ) : null}
-          <div className="min-h-0 xl:col-span-2">
+          <div className="flex min-h-0 flex-col gap-3 xl:col-span-2 xl:overflow-auto">
+            <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
               record={record}
               statusOverrides={statusOverrides}
@@ -1921,6 +2059,7 @@ export default function BoardPage() {
   const [feedMeta, setFeedMeta] = useState<FeedMeta | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
   const [workflowOverrides, setWorkflowOverrides] = useState<WorkflowOverrideMap>({});
+  const [milestoneOverrides, setMilestoneOverrides] = useState<MilestoneOverrideMap>({});
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
@@ -2082,6 +2221,25 @@ export default function BoardPage() {
       });
   }, []);
 
+  useEffect(() => {
+    // Per-family scheduling/location milestone overrides (small, bounded by what staff set).
+    getMilestones()
+      .then((response) => {
+        const next: MilestoneOverrideMap = {};
+        for (const row of response.data) {
+          (next[row.case_key] = next[row.case_key] ?? {})[row.milestone_key] = {
+            value: row.value,
+            isNa: row.is_na,
+            initials: row.staff_initials,
+          };
+        }
+        setMilestoneOverrides(next);
+      })
+      .catch(() => {
+        setMilestoneOverrides({});
+      });
+  }, []);
+
   async function syncWeeklySheet() {
     setSheetSyncing(true);
     setSheetSyncMessage('');
@@ -2129,6 +2287,41 @@ export default function BoardPage() {
         to: saved.audit.new_state,
         initials: saved.audit.staff_initials,
         changedAt: saved.audit.created_at,
+      };
+      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
+    }
+  }
+
+  async function commitMilestone(record: CaseRecord, def: MilestoneDef, value: string, isNa: boolean, initials: string) {
+    const saved = await saveMilestone({
+      case_key: record.key,
+      case_name: record.name,
+      milestone_key: def.key,
+      value,
+      is_na: isNa,
+      staff_initials: initials,
+    });
+    setMilestoneOverrides((current) => {
+      const next = { ...current };
+      const caseMap = { ...(next[record.key] ?? {}) };
+      if (!isNa && !value.trim()) {
+        delete caseMap[def.key];
+      } else {
+        caseMap[def.key] = { value: isNa ? '' : value.trim(), isNa, initials };
+      }
+      next[record.key] = caseMap;
+      return next;
+    });
+    const audit = saved.audit;
+    if (audit) {
+      const entry: AuditEntry = {
+        kind: 'status',
+        itemId: `${record.key}:${def.key}`,
+        label: `${record.name} — ${def.full}`,
+        from: audit.old_value ?? 'source',
+        to: audit.new_value,
+        initials: audit.staff_initials,
+        changedAt: audit.created_at,
       };
       setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
     }
@@ -2214,9 +2407,14 @@ export default function BoardPage() {
     const normalized = search.trim().toLowerCase();
     return caseRecords
       .filter((record) => recordMatchesView(record, activeView, statusOverrides))
-      .filter((record) => !normalized || record.searchText.includes(normalized))
+      .filter(
+        (record) =>
+          !normalized ||
+          record.searchText.includes(normalized) ||
+          milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized),
+      )
       .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
-  }, [activeView, caseRecords, search, statusOverrides]);
+  }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const hasSourceIssue = sources.some((source) => source.status === 'unavailable');
@@ -2355,8 +2553,12 @@ export default function BoardPage() {
                     )}
                   </div>
                 </button>
-                <div className="px-1 py-1.5"><MenuCell label="Date and time options" entries={record.dateEntries} /></div>
-                <div className="px-1 py-1.5"><MenuCell label="Location options" entries={record.locationEntries} /></div>
+                <div className="px-1 py-1.5">
+                  <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                </div>
+                <div className="px-1 py-1.5">
+                  <MilestoneChips record={record} defs={LOCATION_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                </div>
                 <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
                 <WorkflowProgressCell
                   record={record}
@@ -2379,12 +2581,14 @@ export default function BoardPage() {
         record={selectedRecord}
         statusOverrides={statusOverrides}
         workflowOverrides={workflowOverrides}
+        milestoneOverrides={milestoneOverrides}
         auditEntries={auditEntries}
         detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
         onCommit={commitStatus}
         onUpdate={updateItemField}
         onToggleStep={commitWorkflowStep}
+        onCommitMilestone={commitMilestone}
       />
 
       {syncState === 'unavailable' ? (

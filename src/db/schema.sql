@@ -368,6 +368,30 @@ CREATE TABLE case_workflow_audit (
 
 CREATE INDEX idx_case_workflow_audit_created ON case_workflow_audit(created_at DESC);
 
+-- Per-family scheduling/location milestone overrides (absence of a row = source-derived default).
+CREATE TABLE case_milestones (
+  case_key       TEXT NOT NULL,
+  milestone_key  TEXT NOT NULL,
+  value          TEXT NOT NULL DEFAULT '',
+  is_na          BOOLEAN NOT NULL DEFAULT false,
+  staff_initials TEXT NOT NULL DEFAULT '',
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (case_key, milestone_key)
+);
+
+CREATE TABLE case_milestone_audit (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  case_key       TEXT NOT NULL,
+  case_name      TEXT NOT NULL DEFAULT '',
+  milestone_key  TEXT NOT NULL,
+  old_value      TEXT,
+  new_value      TEXT NOT NULL,
+  staff_initials TEXT NOT NULL DEFAULT '',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_case_milestone_audit_created ON case_milestone_audit(created_at DESC);
+
 CREATE TABLE operational_item_audit (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   item_id        TEXT NOT NULL,

@@ -76,6 +76,22 @@ export const saveWorkflowState = (data: {
     { method: 'POST', body: JSON.stringify(data) },
   );
 
+export const getMilestones = () =>
+  apiFetch<{ data: CaseMilestone[]; audit: CaseMilestoneAudit[] }>('/dashboard/milestones');
+
+export const saveMilestone = (data: {
+  case_key: string;
+  case_name: string;
+  milestone_key: string;
+  value: string;
+  is_na: boolean;
+  staff_initials: string;
+}) =>
+  apiFetch<{ data: CaseMilestone | null; audit: CaseMilestoneAudit | null; changed: boolean }>(
+    '/dashboard/milestones',
+    { method: 'POST', body: JSON.stringify(data) },
+  );
+
 export const syncWeeklyServiceSchedule = () =>
   apiFetch<{ data: { imported: number; source: string } }>(
     '/dashboard/sync/weekly-service',
@@ -300,6 +316,27 @@ export interface CaseWorkflowAudit {
   step_id: string;
   old_state: string | null;
   new_state: string;
+  staff_initials: string;
+  created_at: string;
+}
+
+
+export interface CaseMilestone {
+  case_key: string;
+  milestone_key: string;
+  value: string;
+  is_na: boolean;
+  staff_initials: string;
+  updated_at: string;
+}
+
+export interface CaseMilestoneAudit {
+  id: string;
+  case_key: string;
+  case_name: string;
+  milestone_key: string;
+  old_value: string | null;
+  new_value: string;
   staff_initials: string;
   created_at: string;
 }
