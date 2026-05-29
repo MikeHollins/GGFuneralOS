@@ -105,7 +105,7 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       OR lower(coalesce(to_char(NULLIF(date_of_death, '')::date, 'FMMonth FMDD, YYYY'), '')) LIKE $${index}
       OR EXISTS (
         SELECT 1 FROM case_contact_state c
-        WHERE c.case_key = lower(coalesce(source_payload->>'case_match_key', ''))
+        WHERE c.case_key = lower(coalesce(source_payload->>'case_group_key', source_payload->>'case_match_key', ''))
           AND (
             lower(c.contact_name) LIKE $${index}
             OR lower(c.relationship) LIKE $${index}
@@ -116,7 +116,7 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       )
       OR EXISTS (
         SELECT 1 FROM case_milestones m
-        WHERE m.case_key = lower(coalesce(source_payload->>'case_match_key', ''))
+        WHERE m.case_key = lower(coalesce(source_payload->>'case_group_key', source_payload->>'case_match_key', ''))
           AND (
             lower(m.milestone_key) LIKE $${index}
             OR lower(m.value) LIKE $${index}
@@ -132,7 +132,7 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
     const exactIndex = params.length - 1;
     const patternIndex = params.length;
     filters.push(`(
-      lower(coalesce(source_payload->>'case_match_key', '')) = $${exactIndex}
+      lower(coalesce(source_payload->>'case_group_key', source_payload->>'case_match_key', '')) = $${exactIndex}
       OR regexp_replace(lower(coalesce(label, '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
       OR regexp_replace(lower(coalesce(source_payload->>'name', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
       OR regexp_replace(lower(coalesce(source_payload->>'name_of_deceased', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}

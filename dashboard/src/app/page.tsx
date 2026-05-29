@@ -2348,7 +2348,7 @@ function DeceasedCell({
     (hasCandidate
       ? [record.contactCandidates[0].relationship, record.contactCandidates[0].phone, record.contactCandidates[0].email].filter(Boolean).join(' · ')
       : [
-          record.sourceCaseNumbers[0] ? `Case ${record.sourceCaseNumbers[0]}` : '',
+          record.sourceCaseNumbers[0] ? `GG ref ${record.sourceCaseNumbers[0]}` : '',
           record.mediaMatches.length ? `${record.mediaMatches.length} media match${record.mediaMatches.length === 1 ? '' : 'es'}` : '',
           record.primaryItem.source,
         ].filter(Boolean).join(' · '));
@@ -2928,8 +2928,8 @@ function DetailDrawer({
                     title="Golden Gate per-register case number (not a global ID)"
                   >
                     {record.sourceCaseNumbers.length > 1
-                      ? `Case ${record.sourceCaseNumbers[0]} +${record.sourceCaseNumbers.length - 1}`
-                      : `Case ${record.sourceCaseNumbers[0]}`}
+                      ? `GG ref ${record.sourceCaseNumbers[0]} +${record.sourceCaseNumbers.length - 1}`
+                      : `GG ref ${record.sourceCaseNumbers[0]}`}
                   </span>
                 )}
                 {record.identityStatus === 'unverified' && (
