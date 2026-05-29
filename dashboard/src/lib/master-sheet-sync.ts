@@ -1084,6 +1084,72 @@ function importRowFor(item: DashboardItem, record: Record<string, string>, sourc
   };
 }
 
+// Golden Gate's NN-NNN is a per-register, per-year sequence number — NOT a global case id
+// (verified: 23-001 is a different person in the death-cert log vs the crematory log, and a
+// single death-cert log can even repeat a number). So a deceased threads across logs by NAME,
+// and the only trustworthy year anchor is the death-cert/crematory case-number prefix. We turn a
+// 2-digit prefix into a full year and reject implausible values so data-entry noise (e.g. "32-",
+// "34-") can't mint a fake year bucket.
+function caseNumberYear(caseNumber: string | null | undefined): string | null {
+  const match = caseNumber?.match(/^(\d{2})-\d{3,4}$/);
+  if (!match) return null;
+  const year = 2000 + Number(match[1]);
+  const currentYear = new Date().getFullYear();
+  return year >= 2000 && year <= currentYear + 1 ? String(year) : null;
+}
+
+// Canonical case-identity resolver (single source of truth, §13). Runs over the full import set
+// so name-only logs (cremains/belongings) can borrow the death-year from the same person's
+// numbered death-cert/crematory row. Fail-closed: when a name carries more than one death-year we
+// cannot tell which case a yearless row belongs to, so we mark it `unverified` for director review
+// rather than guessing or silently merging two different people. Each row records the basis for
+// its identity for observability/audit.
+function applyCaseIdentity(rows: ImportRow[]): void {
+  // Phase 1 — map each normalized name to the set of death-years it carries via real case numbers.
+  const yearsByName = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const name = row.source_payload.case_match_key;
+    const year = caseNumberYear(row.source_case_number);
+    if (!name || !year) continue;
+    if (!yearsByName.has(name)) yearsByName.set(name, new Set());
+    yearsByName.get(name)!.add(year);
+  }
+
+  // Phase 2 — assign every row a canonical group key + the basis for it.
+  for (const row of rows) {
+    const name = row.source_payload.case_match_key || '';
+    const ownYear = caseNumberYear(row.source_case_number);
+    const nameYears = name ? yearsByName.get(name) : undefined;
+
+    let year: string | null = null;
+    let status = 'name-only';
+    let basis = 'name only — no year signal';
+
+    if (ownYear) {
+      year = ownYear;
+      status = 'resolved';
+      basis = 'own case number';
+    } else if (nameYears && nameYears.size === 1) {
+      year = [...nameYears][0];
+      status = 'bridged';
+      basis = 'name-matched case number';
+    } else if (nameYears && nameYears.size > 1) {
+      year = null;
+      status = 'unverified';
+      basis = `name spans ${nameYears.size} case-number years`;
+    } else if (row.business_date) {
+      year = row.business_date.slice(0, 4);
+      status = 'date-year';
+      basis = 'business date year';
+    }
+
+    row.source_payload.case_group_key = year && name ? `${name}|${year}` : name;
+    row.source_payload.case_year = year ?? '';
+    row.source_payload.identity_status = status;
+    row.source_payload.identity_basis = basis;
+  }
+}
+
 async function bulkUpsertItems(rows: ImportRow[]) {
   if (!rows.length) return;
   const sql = getSql();
@@ -1281,6 +1347,7 @@ export async function syncMasterSheet(options: SyncOptions = {}) {
       }
     }
 
+    applyCaseIdentity(importRows);
     await bulkUpsertItems(importRows);
     const activeSourceRefs = importRows.map((row) => row.source_ref);
     // Only tabs that actually imported rows this run are eligible for archiving.
