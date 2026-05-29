@@ -96,6 +96,17 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       OR lower(source_payload::text) LIKE $${index}
       OR lower(coalesce(date_of_death, '')) LIKE $${index}
       OR lower(coalesce(to_char(NULLIF(date_of_death, '')::date, 'FMMonth FMDD, YYYY'), '')) LIKE $${index}
+      OR EXISTS (
+        SELECT 1 FROM case_contact_state c
+        WHERE c.case_key = lower(coalesce(source_payload->>'case_match_key', ''))
+          AND (
+            lower(c.contact_name) LIKE $${index}
+            OR lower(c.relationship) LIKE $${index}
+            OR lower(c.phone) LIKE $${index}
+            OR lower(c.email) LIKE $${index}
+            OR lower(c.notes) LIKE $${index}
+          )
+      )
     )`);
   }
 

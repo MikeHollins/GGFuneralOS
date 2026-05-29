@@ -3,10 +3,12 @@
 import Link from 'next/link';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
+  getDashboardCaseContacts,
   getMilestones,
   getOperationalStatuses,
   getOperationsFeed,
   getWorkflowStates,
+  saveDashboardCaseContact,
   saveMilestone,
   saveOperationalStatus,
   saveWorkflowState,
@@ -17,7 +19,7 @@ import {
 import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
 
 type AuditEntry = {
-  kind: 'status' | 'edit';
+  kind: 'status' | 'edit' | 'workflow' | 'milestone' | 'contact';
   itemId: string;
   label: string;
   from: string | null;
@@ -71,11 +73,58 @@ type CaseRecord = {
   serviceStaffEntries: MenuEntry[];
   serviceLogisticsEntries: MenuEntry[];
   owner: string;
+  contactCandidates: FamilyContactCandidate[];
+  sourceContact: FamilyContactCandidate | null;
+  mediaMatches: MediaMatch[];
   dateOfTransition: string | null;
   blocker: string;
   updatedAt: string;
   areaCounts: Partial<Record<OperationArea, number>>;
   searchText: string;
+};
+
+type FamilyContactCandidate = {
+  name: string;
+  relationship: string;
+  phone: string;
+  email: string;
+  source: string;
+  confidence: number;
+  basis: string;
+};
+
+type ContactOverride = {
+  contactName: string;
+  relationship: string;
+  phone: string;
+  email: string;
+  notes: string;
+  initials: string;
+  updatedAt: string;
+};
+
+type ContactOverrideMap = Record<string, ContactOverride>;
+
+type FamilyContactDisplay = {
+  name: string;
+  relationship: string;
+  phone: string;
+  email: string;
+  notes: string;
+  source: string;
+  confidence: number;
+  overridden: boolean;
+};
+
+type MediaMatch = {
+  item: DashboardItem;
+  confidence: number;
+  label: string;
+  type: string;
+  path: string;
+  source: string;
+  modified: string;
+  basis: string;
 };
 
 type WorkflowStepDefinition = {
@@ -636,6 +685,157 @@ function ownerFor(items: DashboardItem[]) {
   return items.find((item) => item.owner && !NON_CONTACT_OWNERS.has(item.owner) && isContactLike(item.owner))?.owner || '';
 }
 
+const CONTACT_NAME_KEYS = [
+  'family_contact',
+  'contact_name',
+  'next_of_kin',
+  'nok',
+  'informant',
+  'responsible_party',
+  'signature_of_receiver',
+  'picked_up_by',
+  'received_by',
+  'beneficiary_name',
+  'rf',
+];
+const CONTACT_RELATIONSHIP_KEYS = ['relationship', 'relation', 'relationship_to_deceased'];
+const CONTACT_PHONE_KEYS = ['phone', 'contact_phone', 'family_phone', 'nok_phone', 'cell', 'telephone'];
+const CONTACT_EMAIL_KEYS = ['email', 'contact_email', 'family_email', 'nok_email'];
+
+function firstPayloadValue(item: DashboardItem, keys: string[]) {
+  const payload = sourcePayload(item);
+  for (const key of keys) {
+    const raw = cleanDisplay(payload[key]);
+    if (raw) return safeFieldValue(key, raw);
+  }
+  return '';
+}
+
+function isLikelyFamilyContactName(value: string, deceasedName: string) {
+  if (!isContactLike(value)) return false;
+  const normalized = normalizeKey(value);
+  if (!normalized || normalized === normalizeKey(deceasedName)) return false;
+  if (NON_CONTACT_OWNERS.has(value)) return false;
+  return true;
+}
+
+function contactCandidatesFor(items: DashboardItem[], deceasedName: string): FamilyContactCandidate[] {
+  const candidates: FamilyContactCandidate[] = [];
+
+  for (const item of items) {
+    const payloadName = firstPayloadValue(item, CONTACT_NAME_KEYS);
+    const ownerName = item.owner && !NON_CONTACT_OWNERS.has(item.owner) ? item.owner : '';
+    const name = isLikelyFamilyContactName(payloadName, deceasedName)
+      ? payloadName
+      : isLikelyFamilyContactName(ownerName, deceasedName)
+        ? ownerName
+        : '';
+    if (!name) continue;
+
+    const relationship = firstPayloadValue(item, CONTACT_RELATIONSHIP_KEYS);
+    const phone = firstPayloadValue(item, CONTACT_PHONE_KEYS);
+    const email = firstPayloadValue(item, CONTACT_EMAIL_KEYS);
+    const confidence = 0.55 + (relationship ? 0.15 : 0) + (phone || email ? 0.15 : 0) + (payloadName ? 0.1 : 0);
+    candidates.push({
+      name,
+      relationship,
+      phone,
+      email,
+      source: item.source,
+      confidence: Math.min(confidence, 0.95),
+      basis: payloadName ? 'source field' : 'assigned-to field',
+    });
+  }
+
+  const deduped = new Map<string, FamilyContactCandidate>();
+  for (const candidate of candidates) {
+    const key = [normalizeKey(candidate.name), normalizeKey(candidate.relationship), candidate.phone, candidate.email].join('|');
+    const current = deduped.get(key);
+    if (!current || candidate.confidence > current.confidence) deduped.set(key, candidate);
+  }
+  return Array.from(deduped.values()).sort((a, b) => b.confidence - a.confidence);
+}
+
+function effectiveFamilyContact(record: CaseRecord, overrides: ContactOverrideMap): FamilyContactDisplay | null {
+  const override = overrides[record.key];
+  if (override && [override.contactName, override.relationship, override.phone, override.email, override.notes].some(Boolean)) {
+    return {
+      name: override.contactName,
+      relationship: override.relationship,
+      phone: override.phone,
+      email: override.email,
+      notes: override.notes,
+      source: 'Staff override',
+      confidence: 1,
+      overridden: true,
+    };
+  }
+
+  const source = record.sourceContact;
+  if (!source) return null;
+  return {
+    name: source.name,
+    relationship: source.relationship,
+    phone: source.phone,
+    email: source.email,
+    notes: '',
+    source: source.source,
+    confidence: source.confidence,
+    overridden: false,
+  };
+}
+
+function contactSearchText(record: CaseRecord, overrides: ContactOverrideMap) {
+  const contact = effectiveFamilyContact(record, overrides);
+  const candidates = record.contactCandidates.flatMap((candidate) => [candidate.name, candidate.relationship, candidate.phone, candidate.email, candidate.source]);
+  return [
+    contact?.name ?? '',
+    contact?.relationship ?? '',
+    contact?.phone ?? '',
+    contact?.email ?? '',
+    contact?.notes ?? '',
+    ...candidates,
+  ].join(' ');
+}
+
+function contactGridText(contact: FamilyContactDisplay | null) {
+  if (!contact) return null;
+  const secondary = [contact.relationship, contact.phone, contact.email].filter(Boolean).join(' · ');
+  return { primary: contact.name || 'Contact saved', secondary };
+}
+
+function mediaMatchForItem(item: DashboardItem, knownCase: { key: string; name: string }): MediaMatch {
+  const payload = sourcePayload(item);
+  const haystack = [
+    cleanDisplay(payload.case_match_key),
+    cleanDisplay(payload.name),
+    item.label,
+    item.detail,
+    item.sourceRef ?? '',
+    cleanDisplay(payload.relative_path),
+    cleanDisplay(payload.parent_path),
+  ].join(' ');
+  const exactKey = normalizeKey(cleanDisplay(payload.case_match_key)) === knownCase.key;
+  const normalizedName = normalizeKey(knownCase.name);
+  const exactName = Boolean(normalizedName) && normalizeKey(haystack).includes(normalizedName);
+  const tokenScore = Math.max(tokenMatchScore(knownCase.name, haystack), tokenMatchScore(knownCase.key, haystack));
+  const confidence = exactKey ? 1 : exactName ? 0.95 : Math.min(Math.max(tokenScore, 0.6), 0.9);
+  const extension = cleanDisplay(payload.extension).replace(/^\./, '').toUpperCase();
+  const path = cleanDisplay(payload.relative_path) || cleanDisplay(payload.parent_path) || item.sourceRef || item.label;
+  const label = confidence >= 0.9 ? 'Confirmed' : confidence >= 0.75 ? 'Likely' : 'Review';
+
+  return {
+    item,
+    confidence,
+    label,
+    type: extension || item.area,
+    path,
+    source: item.source,
+    modified: cleanDisplay(payload.modified_at) || item.due || '',
+    basis: exactKey ? 'case key' : exactName ? 'name in path' : 'token match',
+  };
+}
+
 // Human-readable Date of Transition (date of death). Input is canonical YYYY-MM-DD.
 function formatTransitionDate(raw: string) {
   const date = new Date(`${raw}T12:00:00`);
@@ -816,6 +1016,226 @@ function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; 
   );
 }
 
+type CommitContact = (record: CaseRecord, next: ContactOverride, initials: string) => Promise<void>;
+
+function FamilyContactEditor({
+  record,
+  overrides,
+  onCommitContact,
+}: {
+  record: CaseRecord;
+  overrides: ContactOverrideMap;
+  onCommitContact: CommitContact;
+}) {
+  const contact = effectiveFamilyContact(record, overrides);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<ContactOverride>({
+    contactName: contact?.name ?? '',
+    relationship: contact?.relationship ?? '',
+    phone: contact?.phone ?? '',
+    email: contact?.email ?? '',
+    notes: contact?.notes ?? '',
+    initials: '',
+    updatedAt: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  function begin(next?: Partial<ContactOverride>) {
+    setDraft({
+      contactName: next?.contactName ?? contact?.name ?? '',
+      relationship: next?.relationship ?? contact?.relationship ?? '',
+      phone: next?.phone ?? contact?.phone ?? '',
+      email: next?.email ?? contact?.email ?? '',
+      notes: next?.notes ?? contact?.notes ?? '',
+      initials: '',
+      updatedAt: '',
+    });
+    setError('');
+    setEditing(true);
+  }
+
+  async function save(nextDraft = draft) {
+    const initials = promptInitials();
+    if (!initials) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onCommitContact(record, nextDraft, initials);
+      setEditing(false);
+    } catch (err: any) {
+      setError(err?.message || 'Could not save family contact');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    const initials = promptInitials();
+    if (!initials) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onCommitContact(record, {
+        contactName: '',
+        relationship: '',
+        phone: '',
+        email: '',
+        notes: '',
+        initials: '',
+        updatedAt: '',
+      }, initials);
+      setEditing(false);
+    } catch (err: any) {
+      setError(err?.message || 'Could not clear family contact');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-neutral-200 bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-neutral-200 px-3 py-2">
+        <div>
+          <h3 className="text-sm font-bold text-neutral-950">Family contact / next of kin</h3>
+          <div className="text-[11px] text-neutral-500">
+            {contact?.overridden ? 'Staff-confirmed internal contact.' : contact ? `Source candidate from ${contact.source}.` : 'No source contact found yet.'}
+          </div>
+        </div>
+        {!editing ? (
+          <button type="button" onClick={() => begin()} className="h-7 rounded-md bg-black px-2 text-[11px] font-semibold text-[#efb70c]">
+            Edit contact
+          </button>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 p-3 lg:grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)]">
+        <div className="rounded-md bg-neutral-50 p-2 text-xs">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">Current</div>
+          {contact ? (
+            <div className="mt-1 space-y-1">
+              <div className="text-sm font-bold text-neutral-950">{contact.name || 'Contact saved'}</div>
+              {contact.relationship ? <div><span className="font-semibold text-neutral-500">Relationship: </span>{contact.relationship}</div> : null}
+              {contact.phone ? <div><span className="font-semibold text-neutral-500">Phone: </span>{contact.phone}</div> : null}
+              {contact.email ? <div><span className="font-semibold text-neutral-500">Email: </span>{contact.email}</div> : null}
+              {contact.notes ? <div><span className="font-semibold text-neutral-500">Notes: </span>{contact.notes}</div> : null}
+            </div>
+          ) : (
+            <div className="mt-2 italic text-neutral-400">No contact on file.</div>
+          )}
+        </div>
+
+        {editing ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {[
+              ['Name', 'contactName', 'Full name'],
+              ['Relationship', 'relationship', 'Daughter, spouse, next of kin'],
+              ['Phone', 'phone', 'Phone'],
+              ['Email', 'email', 'Email'],
+            ].map(([label, field, placeholder]) => (
+              <label key={field} className="text-xs font-semibold text-neutral-500">
+                {label}
+                <input
+                  value={String(draft[field as keyof ContactOverride] ?? '')}
+                  onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))}
+                  placeholder={placeholder}
+                  className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+                />
+              </label>
+            ))}
+            <label className="text-xs font-semibold text-neutral-500 sm:col-span-2">
+              Internal notes
+              <textarea
+                value={draft.notes}
+                onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
+                placeholder="Optional staff note"
+                className="mt-1 min-h-16 w-full resize-y rounded-md border border-neutral-300 px-2 py-1.5 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+              />
+            </label>
+            <div className="flex flex-wrap gap-1 sm:col-span-2">
+              <button type="button" disabled={busy} onClick={() => save()} className="h-7 rounded-md bg-black px-2 text-[11px] font-semibold text-[#efb70c] disabled:opacity-60">Save</button>
+              <button type="button" disabled={busy} onClick={clear} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700 disabled:opacity-60">Use source / clear</button>
+              <button type="button" onClick={() => setEditing(false)} className="h-7 rounded-md px-2 text-[11px] font-semibold text-neutral-500 hover:bg-neutral-100">Cancel</button>
+              {error ? <span className="px-2 py-1 text-[11px] text-red-700">{error}</span> : null}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-neutral-400">Source candidates</div>
+            <div className="grid gap-1 sm:grid-cols-2">
+              {record.contactCandidates.length ? record.contactCandidates.slice(0, 4).map((candidate) => (
+                <button
+                  key={`${candidate.name}-${candidate.relationship}-${candidate.source}`}
+                  type="button"
+                  onClick={() => {
+                    begin({
+                      contactName: candidate.name,
+                      relationship: candidate.relationship,
+                      phone: candidate.phone,
+                      email: candidate.email,
+                    });
+                  }}
+                  className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-left text-xs transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
+                  title={`Candidate from ${candidate.source}; ${Math.round(candidate.confidence * 100)}% confidence`}
+                >
+                  <span className="block truncate font-bold text-neutral-900">{candidate.name}</span>
+                  <span className="block truncate text-neutral-500">{[candidate.relationship, candidate.phone, candidate.email].filter(Boolean).join(' · ') || candidate.basis}</span>
+                </button>
+              )) : <div className="text-xs italic text-neutral-400">No source candidates found.</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MediaProgramMatches({ record }: { record: CaseRecord }) {
+  return (
+    <details open className="rounded-lg border border-neutral-200 bg-white">
+      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">
+        Media &amp; program matches ({record.mediaMatches.length})
+      </summary>
+      <div className="border-t border-neutral-200 p-3">
+        {record.mediaMatches.length ? (
+          <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
+            {record.mediaMatches.slice(0, 12).map((match) => (
+              <div key={match.item.id} className="min-w-0 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                    match.confidence >= 0.9
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : match.confidence >= 0.75
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-amber-100 text-amber-900'
+                  }`}>
+                    {match.label}
+                  </span>
+                  <span className="truncate font-bold text-neutral-900">{match.item.label}</span>
+                </div>
+                <div className="mt-1 truncate text-neutral-600" title={match.path}>{match.path}</div>
+                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-neutral-400">
+                  <span>{match.type || 'File'}</span>
+                  <span>{Math.round(match.confidence * 100)}%</span>
+                  <span>{match.basis}</span>
+                  {match.modified ? <span>{match.modified}</span> : null}
+                </div>
+              </div>
+            ))}
+            {record.mediaMatches.length > 12 ? (
+              <div className="rounded-md border border-dashed border-neutral-200 px-2 py-1.5 text-xs italic text-neutral-400">
+                {record.mediaMatches.length - 12} more matched files are loaded in related work below.
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="text-xs italic text-neutral-400">No matched media or production files found in the read-only server index yet.</div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function blockerFor(items: DashboardItem[]) {
   const blockingWords = ['hold', 'missing', 'needed', 'tbd', 'pending', 'waiting', 'incomplete'];
   for (const item of items) {
@@ -882,6 +1302,13 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     const serviceItems = sortedItems.filter((item) => item.area === 'service');
     const serviceStaffEntries = dedupeMenuEntries(serviceItems.flatMap((item) => collectGroupedEntries(item, serviceStaffGroups)));
     const serviceLogisticsEntries = dedupeMenuEntries(serviceItems.flatMap((item) => collectGroupedEntries(item, serviceLogisticsGroups)));
+    const recordName = itemName(statusItem);
+    const contactCandidates = contactCandidatesFor(sortedItems, recordName);
+    const sourceContact = contactCandidates[0] ?? null;
+    const mediaMatches = sortedItems
+      .filter(isServerMediaItem)
+      .map((item) => mediaMatchForItem(item, { key, name: recordName }))
+      .sort((a, b) => b.confidence - a.confidence || a.path.localeCompare(b.path));
     const areaCounts = sortedItems.reduce<Partial<Record<OperationArea, number>>>((counts, item) => {
       counts[item.area] = (counts[item.area] ?? 0) + 1;
       return counts;
@@ -895,7 +1322,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
 
     const record: CaseRecord = {
       key,
-      name: itemName(statusItem),
+      name: recordName,
       items: sortedItems,
       primaryItem,
       statusItem,
@@ -903,7 +1330,10 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       locationEntries,
       serviceStaffEntries,
       serviceLogisticsEntries,
-      owner: ownerFor(sortedItems),
+      owner: sourceContact?.name || ownerFor(sortedItems),
+      contactCandidates,
+      sourceContact,
+      mediaMatches,
       dateOfTransition,
       blocker: blockerFor(sortedItems),
       updatedAt: lastUpdatedFor(sortedItems, auditEntries),
@@ -914,6 +1344,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     record.searchText = [
       record.name,
       record.owner,
+      ...contactCandidates.flatMap((candidate) => [candidate.name, candidate.relationship, candidate.phone, candidate.email, candidate.source]),
+      ...mediaMatches.flatMap((match) => [match.path, match.source, match.type, match.label]),
       record.blocker,
       key,
       // Make the displayed Date of Transition searchable (raw + human-readable).
@@ -1329,6 +1761,19 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
       <div className="text-[9px] font-bold uppercase tracking-wide text-neutral-400">{label}</div>
       <div className="text-sm font-black text-neutral-950">{value}</div>
     </div>
+  );
+}
+
+function FamilyContactCell({ record, overrides }: { record: CaseRecord; overrides: ContactOverrideMap }) {
+  const contact = contactGridText(effectiveFamilyContact(record, overrides));
+  if (!contact) {
+    return <span className="font-normal italic text-neutral-400">No contact on file</span>;
+  }
+  return (
+    <span className="block min-w-0">
+      <span className="block truncate font-bold text-neutral-800">{contact.primary}</span>
+      {contact.secondary ? <span className="block truncate text-[11px] font-normal text-neutral-500">{contact.secondary}</span> : null}
+    </span>
   );
 }
 
@@ -1849,6 +2294,7 @@ function DetailDrawer({
   statusOverrides,
   workflowOverrides,
   milestoneOverrides,
+  contactOverrides,
   auditEntries,
   detailLoading,
   onClose,
@@ -1856,11 +2302,13 @@ function DetailDrawer({
   onUpdate,
   onToggleStep,
   onCommitMilestone,
+  onCommitContact,
 }: {
   record: CaseRecord | null;
   statusOverrides: Record<string, StatusOverride>;
   workflowOverrides: WorkflowOverrideMap;
   milestoneOverrides: MilestoneOverrideMap;
+  contactOverrides: ContactOverrideMap;
   auditEntries: AuditEntry[];
   detailLoading: boolean;
   onClose: () => void;
@@ -1868,6 +2316,7 @@ function DetailDrawer({
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
   onToggleStep: ToggleStep;
   onCommitMilestone: CommitMilestone;
+  onCommitContact: CommitContact;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -1955,6 +2404,7 @@ function DetailDrawer({
           ) : null}
           {/* ONE primary scroll for the whole drawer. Collapsible sections expand inline. */}
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
               record={record}
@@ -1966,6 +2416,8 @@ function DetailDrawer({
             />
 
             <div className="space-y-3">
+              <MediaProgramMatches record={record} />
+
               <details open className="shrink-0 rounded-lg border border-neutral-200">
                 <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</summary>
                 <div className="divide-y divide-neutral-100 border-t border-neutral-200">
@@ -2082,6 +2534,7 @@ export default function BoardPage() {
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
   const [workflowOverrides, setWorkflowOverrides] = useState<WorkflowOverrideMap>({});
   const [milestoneOverrides, setMilestoneOverrides] = useState<MilestoneOverrideMap>({});
+  const [contactOverrides, setContactOverrides] = useState<ContactOverrideMap>({});
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
@@ -2165,7 +2618,7 @@ export default function BoardPage() {
           fieldName: entry.field_name,
           changedAt: entry.created_at,
         }));
-        setAuditEntries((entries) => [...entries.filter((entry) => entry.kind === 'status'), ...itemAuditEntries]
+        setAuditEntries((entries) => [...entries.filter((entry) => entry.kind !== 'edit'), ...itemAuditEntries]
           .sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt))
           .slice(0, 100));
         setSyncState('connected');
@@ -2214,7 +2667,7 @@ export default function BoardPage() {
         }));
 
         setStatusOverrides(nextOverrides);
-        setAuditEntries((entries) => [...nextAuditEntries, ...entries.filter((entry) => entry.kind === 'edit')]
+        setAuditEntries((entries) => [...nextAuditEntries, ...entries.filter((entry) => entry.kind !== 'status')]
           .sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt))
           .slice(0, 100));
       })
@@ -2239,7 +2692,7 @@ export default function BoardPage() {
         setWorkflowOverrides(next);
         const stepLabel = (id: string) => familyWorkflow.find((s) => s.id === id)?.label ?? id;
         const audit: AuditEntry[] = response.audit.map((a) => ({
-          kind: 'status',
+          kind: 'workflow',
           itemId: `${a.case_key}:${a.step_id}`,
           label: `${a.case_name || ''} — ${stepLabel(a.step_id)}`,
           fieldName: stepLabel(a.step_id),
@@ -2270,7 +2723,7 @@ export default function BoardPage() {
         setMilestoneOverrides(next);
         const msLabel = (key: string) => ALL_MILESTONES.find((m) => m.key === key)?.full ?? key;
         const audit: AuditEntry[] = response.audit.map((a) => ({
-          kind: 'status',
+          kind: 'milestone',
           itemId: `${a.case_key}:${a.milestone_key}`,
           label: `${a.case_name || ''} — ${msLabel(a.milestone_key)}`,
           fieldName: msLabel(a.milestone_key),
@@ -2283,6 +2736,40 @@ export default function BoardPage() {
       })
       .catch(() => {
         setMilestoneOverrides({});
+      });
+  }, []);
+
+  useEffect(() => {
+    // Staff-confirmed family/NOK contacts. Source systems remain read-only.
+    getDashboardCaseContacts()
+      .then((response) => {
+        const next: ContactOverrideMap = {};
+        for (const row of response.data) {
+          next[row.case_key] = {
+            contactName: row.contact_name,
+            relationship: row.relationship,
+            phone: row.phone,
+            email: row.email,
+            notes: row.notes,
+            initials: row.staff_initials,
+            updatedAt: row.updated_at,
+          };
+        }
+        setContactOverrides(next);
+        const audit: AuditEntry[] = response.audit.map((a) => ({
+          kind: 'contact',
+          itemId: `${a.case_key}:family-contact`,
+          label: `${a.case_name || ''} — Family contact`,
+          fieldName: a.field_name || 'Family contact',
+          from: a.old_value ?? 'source',
+          to: a.new_value,
+          initials: a.staff_initials,
+          changedAt: a.created_at,
+        }));
+        setAuditEntries((prev) => mergeAudit(audit, prev));
+      })
+      .catch(() => {
+        setContactOverrides({});
       });
   }, []);
 
@@ -2326,7 +2813,7 @@ export default function BoardPage() {
     });
     if (saved.audit) {
       const entry: AuditEntry = {
-        kind: 'status',
+        kind: 'workflow',
         itemId: `${record.key}:${step.id}`,
         label: `${record.name} — ${step.label}`,
         fieldName: step.label,
@@ -2362,7 +2849,7 @@ export default function BoardPage() {
     const audit = saved.audit;
     if (audit) {
       const entry: AuditEntry = {
-        kind: 'status',
+        kind: 'milestone',
         itemId: `${record.key}:${def.key}`,
         label: `${record.name} — ${def.full}`,
         fieldName: def.full,
@@ -2370,6 +2857,51 @@ export default function BoardPage() {
         to: audit.new_value,
         initials: audit.staff_initials,
         changedAt: audit.created_at,
+      };
+      setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
+    }
+  }
+
+  async function commitContact(record: CaseRecord, next: ContactOverride, initials: string) {
+    const saved = await saveDashboardCaseContact({
+      case_key: record.key,
+      case_name: record.name,
+      contact_name: next.contactName,
+      relationship: next.relationship,
+      phone: next.phone,
+      email: next.email,
+      notes: next.notes,
+      staff_initials: initials,
+    });
+
+    setContactOverrides((current) => {
+      const cleanNext = { ...current };
+      if (!saved.data) {
+        delete cleanNext[record.key];
+        return cleanNext;
+      }
+      cleanNext[record.key] = {
+        contactName: saved.data.contact_name,
+        relationship: saved.data.relationship,
+        phone: saved.data.phone,
+        email: saved.data.email,
+        notes: saved.data.notes,
+        initials: saved.data.staff_initials,
+        updatedAt: saved.data.updated_at,
+      };
+      return cleanNext;
+    });
+
+    if (saved.audit) {
+      const entry: AuditEntry = {
+        kind: 'contact',
+        itemId: `${record.key}:family-contact`,
+        label: `${record.name} — Family contact`,
+        fieldName: saved.audit.field_name || 'Family contact',
+        from: saved.audit.old_value ?? 'source',
+        to: saved.audit.new_value,
+        initials: saved.audit.staff_initials,
+        changedAt: saved.audit.created_at,
       };
       setAuditEntries((entries) => [entry, ...entries.filter((existing) => existing.changedAt !== entry.changedAt)].slice(0, 100));
     }
@@ -2459,10 +2991,11 @@ export default function BoardPage() {
         (record) =>
           !normalized ||
           record.searchText.includes(normalized) ||
-          milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized),
+          milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized) ||
+          contactSearchText(record, contactOverrides).toLowerCase().includes(normalized),
       )
       .sort((a, b) => priorityRank(b.primaryItem) - priorityRank(a.primaryItem) || a.name.localeCompare(b.name));
-  }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides]);
+  }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides, contactOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const hasSourceIssue = sources.some((source) => source.status === 'unavailable');
@@ -2471,10 +3004,13 @@ export default function BoardPage() {
     : feedMeta
       ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
       : `${visibleRecords.length} families shown`;
-  const firstCallsToday = useMemo(() => firstCallsTodayCount(caseRecords), [caseRecords]);
-  const servicesCompletedThisMonth = useMemo(
-    () => completedServicesThisMonthCount(caseRecords, statusOverrides),
-    [caseRecords, statusOverrides],
+  const needsContactCount = useMemo(
+    () => caseRecords.filter((record) => !effectiveFamilyContact(record, contactOverrides)).length,
+    [caseRecords, contactOverrides],
+  );
+  const mediaGapsCount = useMemo(
+    () => caseRecords.filter((record) => workflowStateByKey.get(record.key)?.some((state) => state.step.id === 'media-program' && !state.done)).length,
+    [caseRecords, workflowStateByKey],
   );
 
   return (
@@ -2528,8 +3064,8 @@ export default function BoardPage() {
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
-              <HeaderMetric label="Calls today" value={firstCallsToday} />
-              <HeaderMetric label="Services month" value={servicesCompletedThisMonth} />
+              <HeaderMetric label="Needs contact" value={needsContactCount} />
+              <HeaderMetric label="Media gaps" value={mediaGapsCount} />
             </div>
             <input
               value={search}
@@ -2602,14 +3138,12 @@ export default function BoardPage() {
                   aria-label={`Open details for ${record.name}`}
                 >
                   <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
-                  <div className="mt-0.5 text-xs text-neutral-600">
-                    <span className="text-neutral-400">Date of transition: </span>
-                    {record.dateOfTransition ? (
-                      formatTransitionDate(record.dateOfTransition)
-                    ) : (
-                      <span className="italic text-neutral-400">Date pending</span>
-                    )}
-                  </div>
+                  {record.dateOfTransition ? (
+                    <div className="mt-0.5 text-xs text-neutral-600">
+                      <span className="text-neutral-400">Date of transition: </span>
+                      {formatTransitionDate(record.dateOfTransition)}
+                    </div>
+                  ) : null}
                 </button>
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
@@ -2618,7 +3152,7 @@ export default function BoardPage() {
                   <MilestoneChips record={record} defs={LOCATION_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>
                 <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">
-                  {record.owner || <span className="font-normal italic text-neutral-400">No contact on file</span>}
+                  <FamilyContactCell record={record} overrides={contactOverrides} />
                 </div>
                 <WorkflowProgressCell
                   record={record}
@@ -2642,6 +3176,7 @@ export default function BoardPage() {
         statusOverrides={statusOverrides}
         workflowOverrides={workflowOverrides}
         milestoneOverrides={milestoneOverrides}
+        contactOverrides={contactOverrides}
         auditEntries={auditEntries}
         detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
@@ -2649,6 +3184,7 @@ export default function BoardPage() {
         onUpdate={updateItemField}
         onToggleStep={commitWorkflowStep}
         onCommitMilestone={commitMilestone}
+        onCommitContact={commitContact}
       />
 
       {syncState === 'unavailable' ? (

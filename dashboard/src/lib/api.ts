@@ -92,6 +92,24 @@ export const saveMilestone = (data: {
     { method: 'POST', body: JSON.stringify(data) },
   );
 
+export const getDashboardCaseContacts = () =>
+  apiFetch<{ data: DashboardCaseContact[]; audit: DashboardCaseContactAudit[] }>('/dashboard/case-contacts');
+
+export const saveDashboardCaseContact = (data: {
+  case_key: string;
+  case_name: string;
+  contact_name: string;
+  relationship: string;
+  phone: string;
+  email: string;
+  notes: string;
+  staff_initials: string;
+}) =>
+  apiFetch<{ data: DashboardCaseContact | null; audit: DashboardCaseContactAudit | null; changed: boolean }>(
+    '/dashboard/case-contacts',
+    { method: 'POST', body: JSON.stringify(data) },
+  );
+
 export const syncWeeklyServiceSchedule = () =>
   apiFetch<{ data: { imported: number; source: string } }>(
     '/dashboard/sync/weekly-service',
@@ -335,6 +353,28 @@ export interface CaseMilestoneAudit {
   case_key: string;
   case_name: string;
   milestone_key: string;
+  old_value: string | null;
+  new_value: string;
+  staff_initials: string;
+  created_at: string;
+}
+
+export interface DashboardCaseContact {
+  case_key: string;
+  contact_name: string;
+  relationship: string;
+  phone: string;
+  email: string;
+  notes: string;
+  staff_initials: string;
+  updated_at: string;
+}
+
+export interface DashboardCaseContactAudit {
+  id: string;
+  case_key: string;
+  case_name: string;
+  field_name: string;
   old_value: string | null;
   new_value: string;
   staff_initials: string;
