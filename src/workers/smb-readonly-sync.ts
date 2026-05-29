@@ -83,7 +83,6 @@ function caseMatchKey(value: string) {
     .toLowerCase()
     .replace(/\.[a-z0-9]+$/i, '')
     .replace(/\b(panel|program|booklet|register|copy|final|draft|new)\b/g, '')
-    .replace(/\b(jr|sr|ii|iii|iv)\b/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
