@@ -168,13 +168,13 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location'; sourceKeys: string[] };
 const DATE_MILESTONES: MilestoneDef[] = [
   { key: 'first_call', label: 'Call', full: 'First call', kind: 'date', sourceKeys: ['first_call_date', 'first_call', 'date_received', 'received_date'] },
-  { key: 'service', label: 'Svc', full: 'Service', kind: 'date', sourceKeys: ['service_date', 'service_time', 'date', 'time'] },
-  { key: 'cremation', label: 'Crem', full: 'Cremation', kind: 'date', sourceKeys: ['cremation_date', 'date_of_cremation'] },
+  { key: 'service', label: 'Service', full: 'Service', kind: 'date', sourceKeys: ['service_date', 'service_time', 'date', 'time'] },
+  { key: 'cremation', label: 'Cremation', full: 'Cremation', kind: 'date', sourceKeys: ['cremation_date', 'date_of_cremation'] },
   { key: 'burial', label: 'Burial', full: 'Burial', kind: 'date', sourceKeys: ['committal_date', 'committal_time'] },
 ];
 const LOCATION_MILESTONES: MilestoneDef[] = [
-  { key: 'service_location', label: 'Svc', full: 'Service location', kind: 'location', sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
-  { key: 'cremation_location', label: 'Crem', full: 'Cremation location', kind: 'location', sourceKeys: ['crematory', 'crematory_name'] },
+  { key: 'service_location', label: 'Service', full: 'Service location', kind: 'location', sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
+  { key: 'cremation_location', label: 'Cremation', full: 'Cremation location', kind: 'location', sourceKeys: ['crematory', 'crematory_name'] },
   { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
 ];
 const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES];
