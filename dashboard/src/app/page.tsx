@@ -164,7 +164,7 @@ const primaryViews: ViewId[] = ['active', 'cases', 'calendar'];
 const appTopLinks = [
   { href: '/staff', label: 'Staff/Admin', ready: true },
   { href: '/texts', label: 'Texts', ready: false },
-  { href: '/payments', label: 'Payments', ready: true },
+  { href: '/payments', label: 'Payments', ready: false },
 ];
 
 const visibleRecordLimit = 200;
@@ -3349,11 +3349,14 @@ export default function BoardPage() {
     : feedMeta
       ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
       : `${visibleRecords.length} families shown`;
-  const firstCallsToday = useMemo(() => firstCallsTodayCount(caseRecords), [caseRecords]);
-  const servicesCompletedThisMonth = useMemo(
-    () => completedServicesThisMonthCount(caseRecords, statusOverrides),
-    [caseRecords, statusOverrides],
-  );
+  // Actionable, always-real header counts (the prior first-call/services-month tickers read
+  // 0 because the source has no first-call dates or completed-service markers).
+  const activeCaseCount = useMemo(() => caseRecords.filter((record) => recordIsActive(record)).length, [caseRecords]);
+  const cremationsScheduled = useMemo(() => {
+    const cremationDef = DATE_MILESTONES.find((def) => def.key === 'cremation');
+    if (!cremationDef) return 0;
+    return caseRecords.filter((record) => effectiveMilestone(record, cremationDef, milestoneOverrides).state !== 'empty').length;
+  }, [caseRecords, milestoneOverrides]);
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
@@ -3404,8 +3407,8 @@ export default function BoardPage() {
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
-              <HeaderMetric label="First calls today" value={firstCallsToday} />
-              <HeaderMetric label="Services this month" value={servicesCompletedThisMonth} />
+              <HeaderMetric label="Active cases" value={activeCaseCount} />
+              <HeaderMetric label="Cremations scheduled" value={cremationsScheduled} />
             </div>
             <input
               value={search}
