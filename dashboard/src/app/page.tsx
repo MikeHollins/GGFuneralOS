@@ -76,6 +76,7 @@ type CaseRecord = {
   contactCandidates: FamilyContactCandidate[];
   sourceContact: FamilyContactCandidate | null;
   mediaMatches: MediaMatch[];
+  dateOfBirth: string | null;
   dateOfTransition: string | null;
   blocker: string;
   updatedAt: string;
@@ -699,6 +700,7 @@ const CONTACT_NAME_KEYS = [
 const CONTACT_RELATIONSHIP_KEYS = ['relationship', 'relation', 'relationship_to_deceased'];
 const CONTACT_PHONE_KEYS = ['phone', 'contact_phone', 'family_phone', 'nok_phone', 'cell', 'telephone'];
 const CONTACT_EMAIL_KEYS = ['email', 'contact_email', 'family_email', 'nok_email'];
+const DATE_OF_BIRTH_KEYS = ['date_of_birth', 'dob', 'birth_date', 'birthdate', 'd_o_b', 'sunrise'];
 
 function firstPayloadValue(item: DashboardItem, keys: string[]) {
   const payload = sourcePayload(item);
@@ -800,6 +802,14 @@ function contactGridText(contact: FamilyContactDisplay | null) {
   if (!contact) return null;
   const secondary = [contact.relationship, contact.phone, contact.email].filter(Boolean).join(' · ');
   return { primary: contact.name || 'Contact saved', secondary };
+}
+
+function sourceDateOfBirth(items: DashboardItem[]) {
+  for (const item of items) {
+    const value = firstPayloadValue(item, DATE_OF_BIRTH_KEYS);
+    if (value) return value;
+  }
+  return null;
 }
 
 function mediaMatchForItem(item: DashboardItem, knownCase: { key: string; name: string }): MediaMatch {
@@ -1318,6 +1328,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     }, {});
     // Date of Transition (date of death): prefer the death-cert row's captured value, else
     // any row that carries one. Stays null until staff capture it (no guessing).
+    const dateOfBirth = sourceDateOfBirth(sortedItems);
     const dateOfTransition =
       sortedItems.find((item) => item.area === 'death-cert' && item.dateOfDeath)?.dateOfDeath ||
       sortedItems.find((item) => item.dateOfDeath)?.dateOfDeath ||
@@ -1337,6 +1348,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       contactCandidates,
       sourceContact,
       mediaMatches,
+      dateOfBirth,
       dateOfTransition,
       blocker: blockerFor(sortedItems),
       updatedAt: lastUpdatedFor(sortedItems, auditEntries),
@@ -1351,6 +1363,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       ...mediaMatches.flatMap((match) => [match.path, match.source, match.type, match.label]),
       record.blocker,
       key,
+      dateOfBirth ?? '',
+      dateOfBirth ? formatTransitionDate(dateOfBirth) : '',
       // Make the displayed Date of Transition searchable (raw + human-readable).
       dateOfTransition ?? '',
       dateOfTransition ? formatTransitionDate(dateOfTransition) : '',
@@ -1783,24 +1797,67 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function FamilyContactCell({ record, overrides }: { record: CaseRecord; overrides: ContactOverrideMap }) {
-  const effective = effectiveFamilyContact(record, overrides);
+function DeceasedCell({
+  record,
+  contactOverrides,
+  onOpen,
+}: {
+  record: CaseRecord;
+  contactOverrides: ContactOverrideMap;
+  onOpen: () => void;
+}) {
+  const effective = effectiveFamilyContact(record, contactOverrides);
   const contact = contactGridText(effective);
-  if (!contact) {
-    const hasCandidate = record.contactCandidates.length > 0;
-    return (
-      <div className={`rounded-md border px-2 py-1 text-xs font-semibold ${hasCandidate ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
-        <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{hasCandidate ? 'Candidate found' : 'Needed'}</div>
-        <div className="truncate">{hasCandidate ? record.contactCandidates[0].name : 'No contact on file'}</div>
-      </div>
-    );
-  }
+  const hasCandidate = !contact && record.contactCandidates.length > 0;
+  const contactLabel = contact
+    ? effective?.overridden
+      ? 'Staff contact'
+      : 'Source contact'
+    : hasCandidate
+      ? 'Candidate'
+      : 'Contact needed';
+  const contactName = contact?.primary || (hasCandidate ? record.contactCandidates[0].name : 'No contact on file');
+  const contactTone = contact
+    ? effective?.overridden
+      ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : hasCandidate
+      ? 'border-blue-200 bg-blue-50 text-blue-800'
+      : 'border-amber-200 bg-amber-50 text-amber-900';
+
   return (
-    <div className={`rounded-md border px-2 py-1 text-xs font-semibold ${effective?.overridden ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-      <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{effective?.overridden ? 'Staff contact' : 'Source contact'}</div>
-      <div className="truncate">{contact.primary}</div>
-      {contact.secondary ? <div className="truncate text-[10px] font-normal opacity-80">{contact.secondary}</div> : null}
-    </div>
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7]"
+      aria-label={`Open details for ${record.name}`}
+    >
+      <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
+      <div className="mt-1 grid gap-1 text-[10px] leading-tight">
+        <div className="grid grid-cols-2 gap-1">
+          <div className="min-w-0 rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-1 text-neutral-700">
+            <div className="truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">DOB</div>
+            <div className={`truncate font-semibold ${record.dateOfBirth ? '' : 'italic text-neutral-400'}`}>
+              {record.dateOfBirth ? formatTransitionDate(record.dateOfBirth) : 'Pending'}
+            </div>
+          </div>
+          <div className="min-w-0 rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-1 text-neutral-700">
+            <div className="truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">Transition</div>
+            <div className={`truncate font-semibold ${record.dateOfTransition ? '' : 'italic text-neutral-400'}`}>
+              {record.dateOfTransition ? formatTransitionDate(record.dateOfTransition) : 'Pending'}
+            </div>
+          </div>
+        </div>
+        <div className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${contactTone}`}>
+          <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{contactLabel}</div>
+          <div className="truncate">{contactName}</div>
+          {contact?.secondary ? <div className="truncate text-[10px] font-normal opacity-80">{contact.secondary}</div> : null}
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -3133,11 +3190,10 @@ export default function BoardPage() {
 
       <main className="p-3">
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:hidden">
+          <div className="grid grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
-            <div className="px-2 py-2 max-xl:hidden">Family Contact</div>
             <div className="px-2 py-2 text-center">Status</div>
           </div>
 
@@ -3162,34 +3218,15 @@ export default function BoardPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                className="grid w-full cursor-pointer grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:block"
+                className="grid w-full cursor-pointer grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
                 aria-label={`Open details for ${record.name}`}
               >
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelectedKey(record.key);
-                  }}
-                  className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7]"
-                  aria-label={`Open details for ${record.name}`}
-                >
-                  <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
-                  {record.dateOfTransition ? (
-                    <div className="mt-0.5 text-xs text-neutral-600">
-                      <span className="text-neutral-400">Date of transition: </span>
-                      {formatTransitionDate(record.dateOfTransition)}
-                    </div>
-                  ) : null}
-                </button>
+                <DeceasedCell record={record} contactOverrides={contactOverrides} onOpen={() => setSelectedKey(record.key)} />
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={LOCATION_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
-                </div>
-                <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">
-                  <FamilyContactCell record={record} overrides={contactOverrides} />
                 </div>
                 <WorkflowProgressCell
                   record={record}
