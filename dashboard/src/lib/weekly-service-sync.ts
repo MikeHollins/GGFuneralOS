@@ -385,11 +385,14 @@ function parseSheetDate(value: string | undefined): Date | null {
     const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
     return Number.isNaN(d.getTime()) ? null : d;
   }
-  // Sheets use both M/D/Y and M.D.Y (e.g. "8/1/2024", "5.21.2026").
-  const md = text.match(/\b(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})\b/);
+  // Sheets use M/D/Y, M.D.Y, and M-D-Y (e.g. "8/1/2024", "5.21.2026", "1-23-26").
+  const md = text.match(/\b(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b/);
   if (md) {
     const year = Number(md[3].length === 2 ? `20${md[3]}` : md[3]);
-    const d = new Date(year, Number(md[1]) - 1, Number(md[2]), 12);
+    const month = Number(md[1]);
+    const day = Number(md[2]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const d = new Date(year, month - 1, day, 12);
     return Number.isNaN(d.getTime()) ? null : d;
   }
   return null;
@@ -607,7 +610,32 @@ type ImportRow = {
   source_ref: string;
   source_payload: Record<string, string>;
   source_content_hash: string;
+  business_date: string | null;
 };
+
+const BUSINESS_DATE_KEYS = [
+  'date', 'service_date', 'arrangement_date', 'appointment_date', 'date_of_death', 'death_date',
+  'date_of_cremation', 'cremation_date', 'date_of_return', 'return_date', 'pick_up_date', 'pickup_date',
+  'release_date', 'date_filed', 'filed', 'date_sent', 'sent', 'at_mokan_since', 'drop_off_date',
+  'modified_at', 'day',
+];
+
+// The row's most recent real date, used to order the feed by recency so active cases across
+// every area load within the row cap. Parses only known date columns (never free text like
+// phone numbers). Returns canonical YYYY-MM-DD or null.
+function computeBusinessDate(record: Record<string, string>, dueText: string): string | null {
+  let best: Date | null = null;
+  const candidates = [dueText, ...BUSINESS_DATE_KEYS.map((key) => record[key])];
+  for (const candidate of candidates) {
+    const parsed = parseSheetDate(candidate);
+    if (parsed && (!best || parsed.getTime() > best.getTime())) best = parsed;
+  }
+  if (!best) return null;
+  const year = best.getFullYear();
+  const month = String(best.getMonth() + 1).padStart(2, '0');
+  const day = String(best.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function importRowFor(item: DashboardItem, record: Record<string, string>, sourceRef = `${item.source}!${record._row_number}`): ImportRow {
   return {
@@ -628,6 +656,7 @@ function importRowFor(item: DashboardItem, record: Record<string, string>, sourc
       case_match_basis: item.source === 'Arrangements' ? 'arrangement calendar cell' : 'source name field',
     },
     source_content_hash: hashRecord(record),
+    business_date: computeBusinessDate(record, item.due),
   };
 }
 
@@ -654,15 +683,16 @@ async function bulkUpsertItems(rows: ImportRow[]) {
            options jsonb,
            source_ref text,
            source_payload jsonb,
-           source_content_hash text
+           source_content_hash text,
+           business_date date
          )
        )
        INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, updated_at)
+          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, business_date, updated_at)
        SELECT
          item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-         'google-sheet', source_ref, source_payload, now(), source_content_hash, now()
+         'google-sheet', source_ref, source_payload, now(), source_content_hash, business_date, now()
        FROM incoming
        ON CONFLICT (item_id) DO UPDATE SET
          area = EXCLUDED.area,
@@ -679,6 +709,7 @@ async function bulkUpsertItems(rows: ImportRow[]) {
          source_payload = EXCLUDED.source_payload,
          source_seen_at = now(),
          source_content_hash = EXCLUDED.source_content_hash,
+         business_date = EXCLUDED.business_date,
          is_archived = false,
          updated_at = now()`,
       [JSON.stringify(chunk)],

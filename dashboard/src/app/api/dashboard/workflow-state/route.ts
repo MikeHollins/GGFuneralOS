@@ -33,6 +33,9 @@ export async function POST(request: Request) {
 
     if (!caseKey || !stepId) return NextResponse.json({ error: 'case_key and step_id are required' }, { status: 400 });
     if (!ALLOWED_STATES.has(state)) return NextResponse.json({ error: 'state must be done, pending, or auto' }, { status: 400 });
+    // Audit-trail requirement: a checked/unchecked step must record who did it. Blank
+    // initials are only allowed for 'auto' (removing an override).
+    if (state !== 'auto' && !initials) return NextResponse.json({ error: 'Staff initials are required to set a step done or not done' }, { status: 400 });
 
     const sql = getSql();
     const existing = await sql('SELECT state FROM case_workflow_state WHERE case_key = $1 AND step_id = $2', [caseKey, stepId]);

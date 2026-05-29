@@ -115,6 +115,13 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
   return { filters, params };
 }
 
+const ITEM_COLUMNS =
+  'item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, created_at, status_default, priority, options';
+// Most-recent rows kept PER AREA so no area is ever dropped by a global cap — death-cert,
+// belongings, and service have no parseable business_date, so a flat recency sort would
+// bury them last and truncate them. Per-area top-N guarantees every area is represented.
+const PER_AREA_LIMIT = 250;
+
 async function getItems({
   limit = 750,
   query = '',
@@ -123,36 +130,42 @@ async function getItems({
   const sql = getSql();
   await seedItemsIfEmpty();
   const { filters, params } = itemFilters({ query, caseKey });
+  const whereSql = filters.join(' AND ');
+  const filterParams = [...params]; // WHERE params only, before list-specific limits are appended
 
-  params.push(limit);
-  const limitIndex = params.length;
+  // The drawer fetches a single case and wants ALL of its rows (no per-area cap). The board
+  // (no caseKey) uses a per-area window so every area surfaces its most-recent rows.
+  let listSql: string;
+  if (caseKey) {
+    params.push(limit);
+    listSql = `SELECT ${ITEM_COLUMNS}
+       FROM operational_items
+       WHERE ${whereSql}
+       ORDER BY business_date DESC NULLS LAST, created_at DESC
+       LIMIT $${params.length}`;
+  } else {
+    params.push(PER_AREA_LIMIT);
+    const perAreaIndex = params.length;
+    params.push(Math.max(limit, PER_AREA_LIMIT * 8));
+    const limitIndex = params.length;
+    listSql = `SELECT ${ITEM_COLUMNS} FROM (
+         SELECT ${ITEM_COLUMNS},
+                row_number() OVER (PARTITION BY area ORDER BY business_date DESC NULLS LAST, created_at DESC) AS rn
+         FROM operational_items
+         WHERE ${whereSql}
+       ) ranked
+       WHERE rn <= $${perAreaIndex}
+       ORDER BY business_date DESC NULLS LAST, created_at DESC
+       LIMIT $${limitIndex}`;
+  }
 
   const [rows, totalRows] = await Promise.all([
-    sql(
-      `SELECT item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, created_at, status_default, priority, options
-     FROM operational_items
-     WHERE ${filters.join(' AND ')}
-     ORDER BY
-       CASE area
-         WHEN 'service' THEN 1
-         WHEN 'arrangement' THEN 2
-         WHEN 'death-cert' THEN 3
-         WHEN 'cremains' THEN 4
-         WHEN 'crematory' THEN 5
-         WHEN 'belongings' THEN 6
-         WHEN 'production' THEN 7
-         WHEN 'paperwork' THEN 8
-         ELSE 99
-       END,
-       created_at
-     LIMIT $${limitIndex}`,
-      params,
-    ),
+    sql(listSql, params),
     sql(
       `SELECT COUNT(*)::int AS count
        FROM operational_items
-       WHERE ${filters.join(' AND ')}`,
-      params.slice(0, -1),
+       WHERE ${whereSql}`,
+      filterParams,
     ),
   ]);
 

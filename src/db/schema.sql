@@ -332,6 +332,7 @@ CREATE TABLE operational_items (
   source_seen_at TIMESTAMPTZ,
   source_content_hash TEXT,
   date_of_death  TEXT,
+  business_date  DATE,
   edited_fields  JSONB NOT NULL DEFAULT '{}',
   is_archived    BOOLEAN NOT NULL DEFAULT false,
   created_at     TIMESTAMPTZ DEFAULT now(),
@@ -341,6 +342,7 @@ CREATE TABLE operational_items (
 CREATE INDEX idx_operational_items_area ON operational_items(area, is_archived);
 CREATE INDEX idx_operational_items_source_origin ON operational_items(source_origin, is_archived);
 CREATE INDEX idx_operational_items_source_ref ON operational_items(source_origin, source_ref) WHERE is_archived = false;
+CREATE INDEX idx_operational_items_business_date ON operational_items(business_date DESC NULLS LAST, created_at DESC) WHERE is_archived = false;
 
 -- Durable per-family workflow checklist override (absence of a row = auto-derived).
 CREATE TABLE case_workflow_state (
