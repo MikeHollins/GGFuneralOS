@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   getDashboardCaseContacts,
   getMilestones,
@@ -1203,13 +1204,43 @@ function FamilyContactEditor({
   );
 }
 
+function DrawerDisclosure({
+  title,
+  meta,
+  defaultOpen = false,
+  children,
+  bodyClassName = 'p-3',
+}: {
+  title: string;
+  meta?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+  bodyClassName?: string;
+}) {
+  return (
+    <details open={defaultOpen} className="group overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm open:border-neutral-300">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-neutral-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#efb70c]/30">
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-bold text-neutral-950">{title}</span>
+          {meta ? <span className="mt-0.5 block truncate text-[11px] font-medium text-neutral-500">{meta}</span> : null}
+        </span>
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-sm font-bold text-neutral-500 group-open:hidden" aria-hidden="true">+</span>
+        <span className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md border border-neutral-300 bg-white text-sm font-bold text-neutral-700 group-open:flex" aria-hidden="true">-</span>
+      </summary>
+      <div className={`border-t border-neutral-200 ${bodyClassName}`}>
+        {children}
+      </div>
+    </details>
+  );
+}
+
 function MediaProgramMatches({ record }: { record: CaseRecord }) {
   return (
-    <details open className="rounded-lg border border-neutral-200 bg-white">
-      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">
-        Media &amp; program matches ({record.mediaMatches.length})
-      </summary>
-      <div className="border-t border-neutral-200 p-3">
+    <DrawerDisclosure
+      title="Media & program matches"
+      meta={`${record.mediaMatches.length} matched files from read-only server index`}
+      defaultOpen
+    >
         {record.mediaMatches.length ? (
           <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
             {record.mediaMatches.slice(0, 12).map((match) => (
@@ -1244,8 +1275,7 @@ function MediaProgramMatches({ record }: { record: CaseRecord }) {
         ) : (
           <div className="text-xs italic text-neutral-400">No matched media or production files found in the read-only server index yet.</div>
         )}
-      </div>
-    </details>
+    </DrawerDisclosure>
   );
 }
 
@@ -2487,7 +2517,7 @@ function DetailDrawer({
             </div>
           ) : null}
           {/* ONE primary scroll for the whole drawer. Collapsible sections expand inline. */}
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-8 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
@@ -2502,9 +2532,7 @@ function DetailDrawer({
             <div className="space-y-3">
               <MediaProgramMatches record={record} />
 
-              <details open className="shrink-0 rounded-lg border border-neutral-200">
-                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</summary>
-                <div className="divide-y divide-neutral-100 border-t border-neutral-200">
+              <DrawerDisclosure title="Recent audit" meta="Staff edits for this family" defaultOpen bodyClassName="divide-y divide-neutral-100">
                   {(() => {
                     const caseAudit = auditEntries
                       .filter((entry) => record.items.some((item) => item.id === entry.itemId) || entry.itemId.startsWith(`${record.key}:`))
@@ -2525,12 +2553,9 @@ function DetailDrawer({
                       <div className="px-3 py-3 text-xs italic text-neutral-400">No staff edits recorded for this family yet.</div>
                     );
                   })()}
-                </div>
-              </details>
+              </DrawerDisclosure>
 
-              <details className="shrink-0 rounded-lg border border-neutral-200">
-                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Source details (read-only)</summary>
-                <div className="space-y-2 border-t border-neutral-200 p-2">
+              <DrawerDisclosure title="Source details" meta="Read-only values from connected source rows" bodyClassName="space-y-2 p-2">
                   {[
                     { t: 'Dates & times', e: record.dateEntries, empty: 'No date or time values found.' },
                     { t: 'Locations', e: record.locationEntries, empty: 'No location values found.' },
@@ -2550,12 +2575,9 @@ function DetailDrawer({
                       </div>
                     </div>
                   ))}
-                </div>
-              </details>
+              </DrawerDisclosure>
 
-              <details className="flex min-h-0 flex-col rounded-lg border border-neutral-200">
-                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Related work ({record.items.length})</summary>
-                <div className="divide-y divide-neutral-100 border-t border-neutral-200">
+              <DrawerDisclosure title="Related work" meta={`${record.items.length} linked source rows and files`} bodyClassName="divide-y divide-neutral-100">
               {record.items.map((item) => (
                 <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
                   <div className="min-w-0">
@@ -2600,8 +2622,7 @@ function DetailDrawer({
                   </div>
                 </div>
               ))}
-                </div>
-              </details>
+              </DrawerDisclosure>
             </div>
           </div>
         </div>
