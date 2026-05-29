@@ -332,10 +332,23 @@ function displayHeader(key: string) {
     .join(' ');
 }
 
+function looksLikeDateOrTime(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (isTimeLike(trimmed)) return true;
+  // Pure date: 5/28, 05-28-2026, 2026-05-28
+  if (/^\d{1,4}([\/-]\d{1,4}){1,2}$/.test(trimmed)) return true;
+  // No alphabetic characters at all (bare numbers, times, date+time fragments) — never a person's name
+  if (!/[a-z]/i.test(trimmed)) return true;
+  return false;
+}
+
 function ownerValue(record: Record<string, string>, config: SheetConfig) {
   const value = first(record, config.ownerKeys);
   const normalized = value.toLowerCase();
   if (['hearse', 'limo', 'programs', 'flowers', 'casket', 'no', 'yes', 'n/a', 'na'].includes(normalized)) return '';
+  // A Family Contact must be a person — reject timestamps/dates that leak in from time columns.
+  if (looksLikeDateOrTime(value)) return '';
   return value;
 }
 

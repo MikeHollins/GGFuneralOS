@@ -545,9 +545,24 @@ function collectTextEntries(item: DashboardItem) {
     .map(([key, value]) => [key, safeFieldValue(key, cleanDisplay(value))] as const);
 }
 
+function isContactLike(value: string | null | undefined) {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  // Reject timestamps/dates/bare numbers that leak in from time columns — a contact is a person.
+  if (/^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*$/i.test(trimmed)) return false;
+  if (/^\d{1,4}([\/-]\d{1,4}){1,2}$/.test(trimmed)) return false;
+  if (!/[a-z]/i.test(trimmed)) return false;
+  return true;
+}
+
 function ownerFor(items: DashboardItem[]) {
   const badOwners = new Set(['Staff', 'Hearse', 'Limo', 'Programs', 'Flowers', 'Casket', 'No', 'Yes', 'N/A', 'NA']);
-  return items.find((item) => item.owner && !badOwners.has(item.owner))?.owner || items[0]?.owner || 'Staff';
+  return (
+    items.find((item) => item.owner && !badOwners.has(item.owner) && isContactLike(item.owner))?.owner ||
+    items.find((item) => isContactLike(item.owner))?.owner ||
+    'Staff'
+  );
 }
 
 function nextActionFor(items: DashboardItem[]) {
@@ -1457,7 +1472,7 @@ function DetailDrawer({
                     </div>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                       <EditableField label="Work item" value={item.label} itemId={item.id} field="label" onUpdate={onUpdate} />
-                      <EditableField label="Owner" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
+                      <EditableField label="Family Contact" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
                       <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
                       <PrioritySelect item={item} onUpdate={onUpdate} />
                     </div>
