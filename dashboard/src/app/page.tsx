@@ -277,9 +277,10 @@ function sourcePayload(item: DashboardItem) {
 }
 
 function normalizeKey(value: string) {
+  // Keep generational suffixes (Jr/Sr/II/III) — they distinguish different people
+  // ("Abernathy, John" vs "Abernathy, John Jr."), so stripping them wrongly merged cases.
   return value
     .toLowerCase()
-    .replace(/\b(jr|sr|ii|iii|iv)\b/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -594,13 +595,17 @@ function isContactLike(value: string | null | undefined) {
   return true;
 }
 
+// Internal teams/roles and logistics flags — never a family contact / next of kin.
+const NON_CONTACT_OWNERS = new Set([
+  'Staff', 'Hearse', 'Limo', 'Programs', 'Flowers', 'Casket', 'Color', 'No', 'Yes', 'N/A', 'NA',
+  'Front desk', 'Crematory', 'Death Certificate', 'Service team', 'Arranger', 'Director', 'Dispatch',
+  'Media', 'Design', 'Office', 'Staff team',
+]);
+// The real family-contact model (case_contact) is a separate build; until then we only show
+// a value here when it is plausibly a person AND not an internal team. Otherwise empty, so the
+// column never misrepresents an internal team as the grieving family's contact.
 function ownerFor(items: DashboardItem[]) {
-  const badOwners = new Set(['Staff', 'Hearse', 'Limo', 'Programs', 'Flowers', 'Casket', 'No', 'Yes', 'N/A', 'NA']);
-  return (
-    items.find((item) => item.owner && !badOwners.has(item.owner) && isContactLike(item.owner))?.owner ||
-    items.find((item) => isContactLike(item.owner))?.owner ||
-    'Staff'
-  );
+  return items.find((item) => item.owner && !NON_CONTACT_OWNERS.has(item.owner) && isContactLike(item.owner))?.owner || '';
 }
 
 // Human-readable Date of Transition (date of death). Input is canonical YYYY-MM-DD.
@@ -779,18 +784,15 @@ function blockerFor(items: DashboardItem[]) {
   return 'None';
 }
 
+// Returns a timestamp only when a real STAFF edit exists for this case; '' otherwise so the
+// grid doesn't repeat "No staff edits" on every untouched row.
 function lastUpdatedFor(items: DashboardItem[], auditEntries: AuditEntry[]) {
   const itemIds = new Set(items.map((item) => item.id));
-  const audit = auditEntries.find((entry) => itemIds.has(entry.itemId));
-  if (audit) return formatStamp(audit.changedAt);
-
-  const modified = items
-    .map((item) => cleanDisplay(sourcePayload(item).modified_at))
-    .filter(Boolean)
-    .sort()
-    .at(-1);
-  if (modified) return safeFieldValue('modified_at', modified);
-  return 'No staff edits';
+  const caseKeys = new Set(items.map((item) => caseKeyForItem(item)));
+  const audit = auditEntries.find(
+    (entry) => itemIds.has(entry.itemId) || [...caseKeys].some((key) => entry.itemId.startsWith(`${key}:`)),
+  );
+  return audit ? formatStamp(audit.changedAt) : '';
 }
 
 function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
@@ -1272,16 +1274,16 @@ function WorkflowProgressCell({
           />
         ))}
       </div>
-      <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-neutral-500">
-        <span className="shrink-0">{doneCount}/{states.length} done</span>
+      <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] font-semibold text-neutral-500">
+        <span className="shrink-0">{doneCount}/{states.length}</span>
         {firstGap ? (
-          <span className="min-w-0 truncate text-red-600">next: {firstGap.step.label}</span>
+          <span className="min-w-0 truncate text-red-600" title={`Gap: ${firstGap.step.label}`}>⚠ {firstGap.step.shortLabel}</span>
         ) : nextNeeded ? (
-          <span className="min-w-0 truncate">next: {nextNeeded.step.label}</span>
+          <span className="min-w-0 truncate text-neutral-600" title={`Next: ${nextNeeded.step.label}`}>→ {nextNeeded.step.shortLabel}</span>
         ) : (
-          <span className="shrink-0 text-emerald-600">complete</span>
+          <span className="shrink-0 text-emerald-600">✓ complete</span>
         )}
-        <span className="ml-auto shrink-0 text-neutral-400">{record.updatedAt}</span>
+        {record.updatedAt ? <span className="ml-auto shrink-0 text-neutral-400">{record.updatedAt}</span> : null}
       </div>
     </div>
   );
@@ -1918,7 +1920,7 @@ function DetailDrawer({
               Loading all linked rows and files for this family.
             </div>
           ) : null}
-          <div className="flex min-h-0 flex-col gap-3 xl:col-span-2 xl:overflow-auto">
+          <div className="flex min-h-0 flex-col gap-3 xl:col-span-2">
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
               record={record}
@@ -2515,7 +2517,7 @@ export default function BoardPage() {
 
       <main className="p-3">
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(150px,0.85fr)_minmax(150px,0.85fr)_minmax(110px,0.6fr)_minmax(380px,2.4fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(140px,0.85fr)_minmax(340px,2.4fr)] max-lg:hidden">
+          <div className="grid grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
@@ -2535,7 +2537,7 @@ export default function BoardPage() {
             ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
-                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(150px,0.85fr)_minmax(150px,0.85fr)_minmax(110px,0.6fr)_minmax(380px,2.4fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(140px,0.85fr)_minmax(340px,2.4fr)] max-lg:block"
+                className="grid w-full grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(120px,0.7fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.3fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] max-lg:block"
               >
                 <button
                   type="button"
@@ -2559,7 +2561,9 @@ export default function BoardPage() {
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={LOCATION_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>
-                <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">{record.owner}</div>
+                <div className="truncate px-2 py-2 text-xs font-semibold text-neutral-700 max-xl:hidden">
+                  {record.owner || <span className="font-normal italic text-neutral-400">No contact on file</span>}
+                </div>
                 <WorkflowProgressCell
                   record={record}
                   states={workflowStateByKey.get(record.key) ?? []}

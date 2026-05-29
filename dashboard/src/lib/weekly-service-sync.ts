@@ -479,8 +479,8 @@ function slug(value: string) {
 }
 
 function caseMatchKey(value: string) {
+  // Keep Jr/Sr/II/III — they distinguish different people and stripping them merged cases.
   return normalizeHeader(value)
-    .replace(/\b(jr|sr|ii|iii|iv)\b/g, '')
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
