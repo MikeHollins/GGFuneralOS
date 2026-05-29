@@ -301,7 +301,9 @@ export interface OperationsFeed {
     source: string;
     sourceRef?: string | null;
     sourcePayload?: Record<string, string>;
+    dateOfBirth?: string | null;
     dateOfDeath?: string | null;
+    sourceCaseNumber?: string | null;
     createdAt?: string;
     status: string;
     priority: 'critical' | 'high' | 'normal' | 'done';

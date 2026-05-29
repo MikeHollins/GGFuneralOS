@@ -18,7 +18,9 @@ export type DashboardItem = {
   source: string;
   sourceRef?: string | null;
   sourcePayload?: Record<string, string>;
+  dateOfBirth?: string | null;
   dateOfDeath?: string | null;
+  sourceCaseNumber?: string | null;
   createdAt?: string;
   status: string;
   priority: 'critical' | 'high' | 'normal' | 'done';
@@ -68,7 +70,7 @@ export function maskSensitiveValue(key: string, value: string): string {
 
 // Keys that carry no PII but ARE relied on for client-side logic (case grouping, row
 // identity). Never run them through the masker.
-const NEVER_MASK_KEYS = new Set(['case_match_key', 'case_match_basis', '_row_number']);
+const NEVER_MASK_KEYS = new Set(['case_match_key', 'case_match_basis', 'source_case_number', '_row_number']);
 
 // Sanitize a raw source_payload before it leaves the server for an authenticated browser
 // client. Staff dashboard users need raw operational contact fields, but SSNs must never

@@ -29,6 +29,10 @@ type SpreadsheetMetadataResponse = {
   }>;
 };
 
+type SyncOptions = {
+  force?: boolean;
+};
+
 type SourceSheetRow = {
   spreadsheet_id: string;
   sheet_name: string;
@@ -292,13 +296,6 @@ async function readResolvedSheetValues(resolvedConfigs: SheetConfig[], token: st
   };
 }
 
-async function readSheetValues(configs: SheetConfig[]) {
-  const token = await getGoogleAccessToken(SHEETS_SCOPE);
-  const resolvedConfigs = await resolveSheetConfigs(configs, token);
-  if (!resolvedConfigs.length) throw new Error('No configured Google Sheet tabs were found in the spreadsheet');
-  return readResolvedSheetValues(resolvedConfigs, token);
-}
-
 async function ensureSourceSheetStagingTables() {
   const sql = getSql();
   await sql(`CREATE TABLE IF NOT EXISTS source_sheet_sync_runs (
@@ -337,6 +334,69 @@ async function ensureSourceSheetStagingTables() {
     ON source_sheet_rows(last_sync_run_id)`);
   await sql(`CREATE INDEX IF NOT EXISTS idx_source_sheet_runs_started
     ON source_sheet_sync_runs(started_at DESC)`);
+
+  await sql(`CREATE TABLE IF NOT EXISTS source_sync_locks (
+    source_id   TEXT PRIMARY KEY,
+    lock_token  TEXT NOT NULL,
+    locked_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+}
+
+async function sourceSheetStagingExists() {
+  const sql = getSql();
+  const rows = await sql(`SELECT to_regclass('public.source_sheet_sync_runs') AS table_name`);
+  return Boolean(rows[0]?.table_name);
+}
+
+async function latestSheetSyncRun() {
+  if (!(await sourceSheetStagingExists())) return null;
+  const sql = getSql();
+  const rows = await sql(
+    `SELECT id, status, read_sheets, raw_row_count, parsed_item_count, archived_row_count, error_message, started_at, finished_at
+     FROM source_sheet_sync_runs
+     WHERE spreadsheet_id = $1
+     ORDER BY started_at DESC
+     LIMIT 1`,
+    [spreadsheetId()],
+  );
+  return rows[0] ?? null;
+}
+
+function syncCooldownMs() {
+  const seconds = Number.parseInt(process.env.GOOGLE_SHEET_SYNC_MIN_INTERVAL_SECONDS ?? '60', 10);
+  return (Number.isFinite(seconds) && seconds >= 0 ? seconds : 60) * 1000;
+}
+
+async function recentCompletedSheetSync() {
+  const latest = await latestSheetSyncRun();
+  if (!latest || latest.status !== 'completed' || !latest.finished_at) return null;
+  const finishedAt = new Date(latest.finished_at).getTime();
+  if (!Number.isFinite(finishedAt)) return null;
+  return Date.now() - finishedAt < syncCooldownMs() ? latest : null;
+}
+
+async function acquireSourceSyncLock(sourceId: string) {
+  await ensureSourceSheetStagingTables();
+  const sql = getSql();
+  const token = hashJson({ sourceId, pid: process.pid, at: Date.now(), random: Math.random() });
+  const staleMinutes = Math.max(1, Number.parseInt(process.env.SOURCE_SYNC_LOCK_STALE_MINUTES ?? '10', 10) || 10);
+  const rows = await sql(
+    `INSERT INTO source_sync_locks (source_id, lock_token, locked_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (source_id) DO UPDATE SET
+       lock_token = EXCLUDED.lock_token,
+       locked_at = now()
+     WHERE source_sync_locks.locked_at < now() - ($3::text || ' minutes')::interval
+     RETURNING lock_token`,
+    [sourceId, token, String(staleMinutes)],
+  );
+  return rows[0]?.lock_token === token ? token : null;
+}
+
+async function releaseSourceSyncLock(sourceId: string, token: string | null) {
+  if (!token) return;
+  const sql = getSql();
+  await sql('DELETE FROM source_sync_locks WHERE source_id = $1 AND lock_token = $2', [sourceId, token]);
 }
 
 function sourceRowRef(sheet: string, rowNumber: number) {
@@ -833,7 +893,9 @@ type ImportRow = {
   source_ref: string;
   source_payload: Record<string, string>;
   source_content_hash: string;
+  date_of_birth: string | null;
   date_of_death: string | null;
+  source_case_number: string | null;
   business_date: string | null;
 };
 
@@ -843,6 +905,44 @@ const BUSINESS_DATE_KEYS = [
   'release_date', 'date_filed', 'filed', 'date_sent', 'sent', 'at_mokan_since', 'drop_off_date',
   'modified_at', 'day',
 ];
+
+const DATE_OF_BIRTH_KEYS = [
+  'date_of_birth',
+  'dob',
+  'd_o_b',
+  'birth_date',
+  'birthdate',
+  'sunrise',
+  'date_of_birth_dob',
+];
+
+const DATE_OF_DEATH_KEYS = [
+  'date_of_death',
+  'death_date',
+  'date_of_transition',
+  'date_of_trnasiiton',
+  'date_of_transiiton',
+  'transition',
+  'transition_date',
+  'trnasiiton',
+  'transiiton',
+  'dod',
+  'd_o_d',
+  'sunset',
+];
+
+const SOURCE_CASE_NUMBER_KEYS = [
+  'source_case_number',
+  'case_number',
+  'case_no',
+  'case_num',
+  'case',
+  'case_id',
+  'mokan_number',
+  'mokan',
+];
+
+const CASE_NUMBER_PATTERN = /\b(\d{2})\s*[-–—]\s*(\d{3,4})\b/;
 
 // The row's most recent real date, used to order the feed by recency so active cases across
 // every area load within the row cap. Parses only known date columns (never free text like
@@ -861,13 +961,101 @@ function computeBusinessDate(record: Record<string, string>, dueText: string): s
   return `${year}-${month}-${day}`;
 }
 
-function computeDateOfDeath(record: Record<string, string>): string | null {
-  const parsed = parseSheetDate(record.date_of_death || record.death_date || record.date_of_transition || record.transition_date || record.dod);
+function canonicalSourceDate(value: string | undefined, kind: 'birth' | 'death'): string | null {
+  const parsed = parseSheetDate(value) ?? parseNamedMonthDate(value);
   if (!parsed) return null;
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  if (parsed.getTime() > today.getTime()) return null;
+  if (kind === 'birth' && parsed.getFullYear() > today.getFullYear()) return null;
   return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
 }
 
+function parseNamedMonthDate(value: string | undefined): Date | null {
+  const text = value?.trim();
+  if (!text) return null;
+  const monthNames = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+  const match = text.match(new RegExp(`\\b(${monthNames})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?[,]?\\s+(\\d{4})\\b`, 'i'));
+  if (!match) return null;
+  const monthIndex = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    .findIndex((prefix) => match[1].toLowerCase().startsWith(prefix));
+  if (monthIndex < 0) return null;
+  return exactLocalDate(Number(match[3]), monthIndex + 1, Number(match[2]));
+}
+
+function labeledDatePattern(labels: string[]) {
+  const label = labels.map((entry) => entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const numeric = '\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}[/.\\-]\\d{1,2}[/.\\-]\\d{2,4}';
+  const named = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?[,]?\\s+\\d{4}';
+  return new RegExp(`\\b(?:${label})\\b\\s*(?:[:=\\-–—]|is|was)?\\s*(${numeric}|${named})\\b`, 'i');
+}
+
+function extractLabeledDate(record: Record<string, string>, kind: 'birth' | 'death'): string | null {
+  const pattern = kind === 'birth'
+    ? labeledDatePattern(['dob', 'd.o.b', 'date of birth', 'birth date', 'born', 'sunrise'])
+    : labeledDatePattern([
+        'dod',
+        'd.o.d',
+        'date of death',
+        'death date',
+        'date of transition',
+        'date of trnasiiton',
+        'date of transiiton',
+        'transition date',
+        'transition',
+        'trnasiiton',
+        'transiiton',
+        'died',
+        'passed away',
+        'sunset',
+      ]);
+  for (const value of Object.values(record)) {
+    const match = value.match(pattern);
+    const parsed = canonicalSourceDate(match?.[1], kind);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function computeDateOfBirth(record: Record<string, string>): string | null {
+  for (const key of DATE_OF_BIRTH_KEYS) {
+    const parsed = canonicalSourceDate(record[key], 'birth');
+    if (parsed) return parsed;
+  }
+  return extractLabeledDate(record, 'birth');
+}
+
+function computeDateOfDeath(record: Record<string, string>): string | null {
+  for (const key of DATE_OF_DEATH_KEYS) {
+    const parsed = canonicalSourceDate(record[key], 'death');
+    if (parsed) return parsed;
+  }
+  return extractLabeledDate(record, 'death');
+}
+
+function normalizeCaseNumber(value: string | undefined): string | null {
+  const match = value?.match(CASE_NUMBER_PATTERN);
+  if (!match) return null;
+  return `${match[1]}-${match[2]}`;
+}
+
+function computeSourceCaseNumber(record: Record<string, string>): string | null {
+  for (const key of SOURCE_CASE_NUMBER_KEYS) {
+    const normalized = normalizeCaseNumber(record[key]);
+    if (normalized) return normalized;
+  }
+  const rowValues = Object.entries(record)
+    .filter(([key]) => key !== '_row_number')
+    .map(([, value]) => value?.trim())
+    .filter(Boolean);
+  const firstCell = rowValues[0];
+  return normalizeCaseNumber(firstCell);
+}
+
 function importRowFor(item: DashboardItem, record: Record<string, string>, sourceRef = `${item.source}!${record._row_number}`): ImportRow {
+  const dateOfBirth = computeDateOfBirth(record);
+  const dateOfDeath = computeDateOfDeath(record);
+  const sourceCaseNumber = computeSourceCaseNumber(record);
   return {
     item_id: item.id,
     area: item.area,
@@ -884,9 +1072,14 @@ function importRowFor(item: DashboardItem, record: Record<string, string>, sourc
       ...record,
       case_match_key: caseMatchKey(item.label),
       case_match_basis: item.source === 'Arrangements' ? 'arrangement calendar cell' : 'source name field',
+      ...(dateOfBirth ? { date_of_birth: dateOfBirth } : {}),
+      ...(dateOfDeath ? { date_of_death: dateOfDeath } : {}),
+      ...(sourceCaseNumber ? { source_case_number: sourceCaseNumber } : {}),
     },
     source_content_hash: hashRecord(record),
-    date_of_death: computeDateOfDeath(record),
+    date_of_birth: dateOfBirth,
+    date_of_death: dateOfDeath,
+    source_case_number: sourceCaseNumber,
     business_date: computeBusinessDate(record, item.due),
   };
 }
@@ -915,16 +1108,20 @@ async function bulkUpsertItems(rows: ImportRow[]) {
            source_ref text,
            source_payload jsonb,
            source_content_hash text,
+           date_of_birth text,
            date_of_death text,
+           source_case_number text,
            business_date date
          )
        )
        INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, date_of_death, business_date, updated_at)
+          source_origin, source_ref, source_payload, source_seen_at, source_content_hash,
+          date_of_birth, date_of_death, source_case_number, business_date, updated_at)
        SELECT
          item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-         'google-sheet', source_ref, source_payload, now(), source_content_hash, date_of_death, business_date, now()
+         'google-sheet', source_ref, source_payload, now(), source_content_hash,
+         date_of_birth, date_of_death, source_case_number, business_date, now()
        FROM incoming
        ON CONFLICT (item_id) DO UPDATE SET
          area = EXCLUDED.area,
@@ -941,7 +1138,9 @@ async function bulkUpsertItems(rows: ImportRow[]) {
          source_payload = EXCLUDED.source_payload,
          source_seen_at = now(),
          source_content_hash = EXCLUDED.source_content_hash,
+         date_of_birth = CASE WHEN operational_items.edited_fields ? 'date_of_birth' THEN operational_items.date_of_birth ELSE EXCLUDED.date_of_birth END,
          date_of_death = CASE WHEN operational_items.edited_fields ? 'date_of_death' THEN operational_items.date_of_death ELSE EXCLUDED.date_of_death END,
+         source_case_number = EXCLUDED.source_case_number,
          business_date = EXCLUDED.business_date,
          is_archived = false,
          updated_at = now()`,
@@ -986,25 +1185,84 @@ async function archivePrototypeItems() {
 }
 
 export async function probeGoogleSheetsConnection() {
-  const { response } = await readSheetValues([sheetConfigs[0]]);
-  const rows = response.valueRanges?.[0]?.values ?? [];
+  const latest = await latestSheetSyncRun();
+  if (latest) {
+    return {
+      row_count: Number(latest.raw_row_count ?? 0),
+      sheet_count: Array.isArray(latest.read_sheets) ? latest.read_sheets.length : sheetConfigs.length,
+      source: 'last_sync',
+      status: latest.status,
+      checked_at: latest.finished_at ?? latest.started_at,
+    };
+  }
+
+  const sql = getSql();
+  const rows = await sql(
+    `SELECT COUNT(*)::int AS row_count, COUNT(DISTINCT source)::int AS sheet_count
+     FROM operational_items
+     WHERE source_origin = 'google-sheet'
+       AND is_archived = false`,
+  );
   return {
-    row_count: Math.max(0, rows.length - 1),
-    sheet_count: 1,
+    row_count: rows[0]?.row_count ?? 0,
+    sheet_count: rows[0]?.sheet_count ?? 0,
+    source: 'local_cache',
+    status: rows[0]?.row_count > 0 ? 'completed' : 'not_synced',
+    checked_at: null,
   };
 }
 
-export async function syncMasterSheet() {
-  const token = await getGoogleAccessToken(SHEETS_SCOPE);
-  const configs = await resolveSheetConfigs(sheetConfigs, token);
-  if (!configs.length) throw new Error('No configured Google Sheet tabs were found in the spreadsheet');
-  const syncRunId = await startSheetSyncRun(configs);
+export async function syncMasterSheet(options: SyncOptions = {}) {
+  const sourceId = `google-sheet:${spreadsheetId()}`;
+  let lockToken: string | null = null;
+  let syncRunId = '';
   let staged = { rawRows: 0, archivedRows: 0 };
   const importRows: ImportRow[] = [];
+
+  if (!options.force) {
+    const recent = await recentCompletedSheetSync();
+    if (recent) {
+      return {
+        imported: Number(recent.parsed_item_count ?? 0),
+        archived: 0,
+        archived_prototype: 0,
+        raw_rows: Number(recent.raw_row_count ?? 0),
+        archived_raw_rows: Number(recent.archived_row_count ?? 0),
+        sync_run_id: String(recent.id ?? ''),
+        source: 'Google Sheets API',
+        skipped: true,
+        reason: 'recent_sync',
+        sheets: {},
+      };
+    }
+  }
+
   const parsedRawSourceRefs = new Set<string>();
   const importedBySheet: Record<string, number> = {};
 
   try {
+    lockToken = await acquireSourceSyncLock(sourceId);
+    if (!lockToken) {
+      const latest = await latestSheetSyncRun();
+      return {
+        imported: Number(latest?.parsed_item_count ?? 0),
+        archived: 0,
+        archived_prototype: 0,
+        raw_rows: Number(latest?.raw_row_count ?? 0),
+        archived_raw_rows: Number(latest?.archived_row_count ?? 0),
+        sync_run_id: String(latest?.id ?? ''),
+        source: 'Google Sheets API',
+        skipped: true,
+        reason: 'sync_already_running',
+        sheets: {},
+      };
+    }
+
+    const token = await getGoogleAccessToken(SHEETS_SCOPE);
+    const configs = await resolveSheetConfigs(sheetConfigs, token);
+    if (!configs.length) throw new Error('No configured Google Sheet tabs were found in the spreadsheet');
+    syncRunId = await startSheetSyncRun(configs);
+
     const { response } = await readResolvedSheetValues(configs, token);
     staged = await recordSourceSheetRows(syncRunId, configs, response);
 
@@ -1058,6 +1316,8 @@ export async function syncMasterSheet() {
       error: error instanceof Error ? error.message : 'Master sheet sync failed',
     });
     throw error;
+  } finally {
+    await releaseSourceSyncLock(sourceId, lockToken);
   }
 }
 

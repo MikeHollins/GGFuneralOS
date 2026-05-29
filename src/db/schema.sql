@@ -331,7 +331,9 @@ CREATE TABLE operational_items (
   source_payload JSONB NOT NULL DEFAULT '{}',
   source_seen_at TIMESTAMPTZ,
   source_content_hash TEXT,
+  date_of_birth  TEXT,
   date_of_death  TEXT,
+  source_case_number TEXT,
   business_date  DATE,
   edited_fields  JSONB NOT NULL DEFAULT '{}',
   is_archived    BOOLEAN NOT NULL DEFAULT false,
@@ -342,6 +344,7 @@ CREATE TABLE operational_items (
 CREATE INDEX idx_operational_items_area ON operational_items(area, is_archived);
 CREATE INDEX idx_operational_items_source_origin ON operational_items(source_origin, is_archived);
 CREATE INDEX idx_operational_items_source_ref ON operational_items(source_origin, source_ref) WHERE is_archived = false;
+CREATE INDEX idx_operational_items_source_case_number ON operational_items(source_case_number) WHERE is_archived = false AND source_case_number IS NOT NULL;
 CREATE INDEX idx_operational_items_business_date ON operational_items(business_date DESC NULLS LAST, created_at DESC) WHERE is_archived = false;
 
 /* Read-only Google master sheet staging. The dashboard materializes operational_items from
@@ -380,6 +383,12 @@ CREATE TABLE source_sheet_rows (
 CREATE INDEX idx_source_sheet_rows_sheet ON source_sheet_rows(spreadsheet_id, sheet_name, is_archived);
 CREATE INDEX idx_source_sheet_rows_sync ON source_sheet_rows(last_sync_run_id);
 CREATE INDEX idx_source_sheet_runs_started ON source_sheet_sync_runs(started_at DESC);
+
+CREATE TABLE source_sync_locks (
+  source_id   TEXT PRIMARY KEY,
+  lock_token  TEXT NOT NULL,
+  locked_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Durable per-family workflow checklist override (absence of a row = auto-derived).
 CREATE TABLE case_workflow_state (

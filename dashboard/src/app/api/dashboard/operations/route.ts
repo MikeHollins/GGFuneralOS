@@ -32,7 +32,9 @@ function toDashboardItem(row: any): DashboardItem {
     source: row.source,
     sourceRef: row.source_ref,
     sourcePayload: sanitizeSourcePayload(row.source_payload),
+    dateOfBirth: row.date_of_birth ?? null,
     dateOfDeath: row.date_of_death ?? null,
+    sourceCaseNumber: row.source_case_number ?? null,
     createdAt: row.created_at,
     status: row.status_default,
     priority: row.priority,
@@ -95,7 +97,10 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       OR lower(owner) LIKE $${index}
       OR lower(source) LIKE $${index}
       OR lower(coalesce(source_ref, '')) LIKE $${index}
+      OR lower(coalesce(source_case_number, '')) LIKE $${index}
       OR lower(source_payload::text) LIKE $${index}
+      OR lower(coalesce(date_of_birth, '')) LIKE $${index}
+      OR lower(coalesce(to_char(NULLIF(date_of_birth, '')::date, 'FMMonth FMDD, YYYY'), '')) LIKE $${index}
       OR lower(coalesce(date_of_death, '')) LIKE $${index}
       OR lower(coalesce(to_char(NULLIF(date_of_death, '')::date, 'FMMonth FMDD, YYYY'), '')) LIKE $${index}
       OR EXISTS (
@@ -133,6 +138,7 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       OR regexp_replace(lower(coalesce(source_payload->>'name_of_deceased', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
       OR regexp_replace(lower(coalesce(source_payload->>'deceased_name_last_first', '')), '[^a-z0-9]+', ' ', 'g') LIKE $${patternIndex}
       OR lower(coalesce(source_ref, '')) LIKE $${patternIndex}
+      OR lower(coalesce(source_case_number, '')) LIKE $${patternIndex}
     )`);
   }
 
@@ -140,7 +146,7 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
 }
 
 const ITEM_COLUMNS =
-  'item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_death, created_at, status_default, priority, options';
+  'item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_birth, date_of_death, source_case_number, created_at, status_default, priority, options';
 // Most-recent rows kept PER AREA so no area is ever dropped by a global cap — death-cert,
 // belongings, and service have no parseable business_date, so a flat recency sort would
 // bury them last and truncate them. Per-area top-N guarantees every area is represented.
@@ -237,13 +243,18 @@ async function checkGoogleSheet(checkedAt: string): Promise<SourceStatus> {
 
   try {
     const result = await probeGoogleSheetsConnection();
+    const checkedAtText = result.checked_at ? new Date(result.checked_at).toLocaleString('en-US') : 'not yet synced';
+    const detail =
+      result.source === 'last_sync'
+        ? `Using cached master sheet sync from ${checkedAtText}: ${result.row_count} source rows across ${result.sheet_count} tabs.`
+        : `Using local imported master sheet cache: ${result.row_count} active rows across ${result.sheet_count} tabs.`;
 
     return {
       id: 'google-sheet',
       label: 'Master Google Sheet',
-      status: 'connected',
+      status: result.status === 'failed' || result.status === 'not_synced' ? 'unavailable' : 'connected',
       mode: 'read_only',
-      detail: `Private Sheets API reachable. Weekly Service Schedule has ${result.row_count} visible rows.`,
+      detail,
       checked_at: checkedAt,
     };
   } catch {
@@ -252,7 +263,7 @@ async function checkGoogleSheet(checkedAt: string): Promise<SourceStatus> {
       label: 'Master Google Sheet',
       status: 'unavailable',
       mode: 'read_only',
-      detail: 'Configured read-only CSV export could not be reached.',
+      detail: 'No local master sheet sync cache is available.',
       checked_at: checkedAt,
     };
   }

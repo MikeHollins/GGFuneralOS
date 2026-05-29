@@ -57,7 +57,7 @@ type StatusOverride = {
 type SourceHealth = OperationsFeed['sources'][number];
 type FeedMeta = NonNullable<OperationsFeed['meta']>;
 type ViewId = 'active' | 'cases' | 'calendar' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
-type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'date_of_death';
+type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'date_of_birth' | 'date_of_death';
 
 type MenuEntry = {
   label: string;
@@ -81,6 +81,7 @@ type CaseRecord = {
   mediaMatches: MediaMatch[];
   dateOfBirth: string | null;
   dateOfTransition: string | null;
+  sourceCaseNumbers: string[];
   blocker: string;
   updatedAt: string;
   areaCounts: Partial<Record<OperationArea, number>>;
@@ -709,7 +710,8 @@ const CONTACT_RELATIONSHIP_KEYS = ['relationship', 'relation', 'relationship_to_
 const CONTACT_PHONE_KEYS = ['phone', 'contact_phone', 'family_phone', 'nok_phone', 'cell', 'telephone'];
 const CONTACT_EMAIL_KEYS = ['email', 'contact_email', 'family_email', 'nok_email'];
 const DATE_OF_BIRTH_KEYS = ['date_of_birth', 'dob', 'birth_date', 'birthdate', 'd_o_b', 'sunrise', 'date_of_birth_dob'];
-const DATE_OF_TRANSITION_KEYS = ['date_of_death', 'death_date', 'date_of_transition', 'transition_date', 'dod', 'sunset'];
+const DATE_OF_TRANSITION_KEYS = ['date_of_death', 'death_date', 'date_of_transition', 'date_of_trnasiiton', 'date_of_transiiton', 'transition', 'transition_date', 'trnasiiton', 'transiiton', 'dod', 'sunset'];
+const SOURCE_CASE_NUMBER_KEYS = ['source_case_number', 'case_number', 'case_no', 'case_num', 'case'];
 
 function firstPayloadValue(item: DashboardItem, keys: string[]) {
   const payload = sourcePayload(item);
@@ -816,6 +818,8 @@ function contactGridText(contact: FamilyContactDisplay | null) {
 function sourceDateOfBirth(items: DashboardItem[]) {
   const preferred = [...items].sort((a, b) => Number(b.area === 'death-cert') - Number(a.area === 'death-cert'));
   for (const item of preferred) {
+    const normalized = cleanDisplay(item.dateOfBirth);
+    if (normalized) return canonicalKnownDate(normalized, 'birth') ?? normalized;
     const value = firstPayloadValue(item, DATE_OF_BIRTH_KEYS);
     if (value) return canonicalKnownDate(value, 'birth') ?? value;
   }
@@ -831,6 +835,17 @@ function sourceDateOfTransition(items: DashboardItem[]) {
     if (value) return canonicalKnownDate(value, 'transition') ?? value;
   }
   return null;
+}
+
+function sourceCaseNumbersFor(items: DashboardItem[]) {
+  return Array.from(new Set(items.flatMap((item) => {
+    const direct = cleanDisplay(item.sourceCaseNumber);
+    if (direct) return [direct];
+    const payload = sourcePayload(item);
+    return SOURCE_CASE_NUMBER_KEYS
+      .map((key) => cleanDisplay(payload[key]))
+      .filter(Boolean);
+  })));
 }
 
 function mediaMatchForItem(item: DashboardItem, knownCase: { key: string; name: string }): MediaMatch {
@@ -1572,6 +1587,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     }, {});
     const dateOfBirth = sourceDateOfBirth(sortedItems);
     const dateOfTransition = sourceDateOfTransition(sortedItems);
+    const sourceCaseNumbers = sourceCaseNumbersFor(sortedItems);
 
     const record: CaseRecord = {
       key,
@@ -1589,6 +1605,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       mediaMatches,
       dateOfBirth,
       dateOfTransition,
+      sourceCaseNumbers,
       blocker: blockerFor(sortedItems),
       updatedAt: lastUpdatedFor(sortedItems, auditEntries),
       areaCounts,
@@ -1602,6 +1619,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       ...mediaMatches.flatMap((match) => [match.path, match.source, match.type, match.label]),
       record.blocker,
       key,
+      ...sourceCaseNumbers,
       dateOfBirth ?? '',
       dateOfBirth ? formatTransitionDate(dateOfBirth) : '',
       // Make the displayed Date of Transition searchable (raw + human-readable).
@@ -2299,6 +2317,7 @@ function DeceasedCell({
     (hasCandidate
       ? [record.contactCandidates[0].relationship, record.contactCandidates[0].phone, record.contactCandidates[0].email].filter(Boolean).join(' · ')
       : [
+          record.sourceCaseNumbers[0] ? `Case ${record.sourceCaseNumbers[0]}` : '',
           record.mediaMatches.length ? `${record.mediaMatches.length} media match${record.mediaMatches.length === 1 ? '' : 'es'}` : '',
           record.primaryItem.source,
         ].filter(Boolean).join(' · '));
