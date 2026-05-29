@@ -327,19 +327,24 @@ export async function GET(request: Request) {
   const query = url.searchParams.get('q') ?? '';
   const caseKey = url.searchParams.get('case_key') ?? '';
   const initialLimit = cleanLimit(url.searchParams.get('limit'), caseKey ? 2000 : 750);
+  const sourceChecks = caseKey
+    ? []
+    : [
+        checkGoogleSheet(checkedAt),
+        checkSmbShare(checkedAt),
+        Promise.resolve({
+          id: 'remotepc',
+          label: 'RemotePC Observation',
+          status: 'not_configured' as const,
+          mode: 'read_only' as const,
+          detail: 'Observation-only source. No dashboard automation writes through RemotePC.',
+          checked_at: checkedAt,
+        }),
+      ];
   const [feed, itemAudit, ...sources] = await Promise.all([
     getItems({ limit: initialLimit, query, caseKey }),
     getRecentItemAudit(),
-    checkGoogleSheet(checkedAt),
-    checkSmbShare(checkedAt),
-    Promise.resolve({
-      id: 'remotepc',
-      label: 'RemotePC Observation',
-      status: 'not_configured' as const,
-      mode: 'read_only' as const,
-      detail: 'Observation-only source. No dashboard automation writes through RemotePC.',
-      checked_at: checkedAt,
-    }),
+    ...sourceChecks,
   ]);
 
   return NextResponse.json({

@@ -677,7 +677,8 @@ const CONTACT_NAME_KEYS = [
 const CONTACT_RELATIONSHIP_KEYS = ['relationship', 'relation', 'relationship_to_deceased'];
 const CONTACT_PHONE_KEYS = ['phone', 'contact_phone', 'family_phone', 'nok_phone', 'cell', 'telephone'];
 const CONTACT_EMAIL_KEYS = ['email', 'contact_email', 'family_email', 'nok_email'];
-const DATE_OF_BIRTH_KEYS = ['date_of_birth', 'dob', 'birth_date', 'birthdate', 'd_o_b', 'sunrise'];
+const DATE_OF_BIRTH_KEYS = ['date_of_birth', 'dob', 'birth_date', 'birthdate', 'd_o_b', 'sunrise', 'date_of_birth_dob'];
+const DATE_OF_TRANSITION_KEYS = ['date_of_death', 'death_date', 'date_of_transition', 'transition_date', 'dod', 'sunset'];
 
 function firstPayloadValue(item: DashboardItem, keys: string[]) {
   const payload = sourcePayload(item);
@@ -782,9 +783,21 @@ function contactGridText(contact: FamilyContactDisplay | null) {
 }
 
 function sourceDateOfBirth(items: DashboardItem[]) {
-  for (const item of items) {
+  const preferred = [...items].sort((a, b) => Number(b.area === 'death-cert') - Number(a.area === 'death-cert'));
+  for (const item of preferred) {
     const value = firstPayloadValue(item, DATE_OF_BIRTH_KEYS);
-    if (value) return value;
+    if (value) return canonicalKnownDate(value) ?? value;
+  }
+  return null;
+}
+
+function sourceDateOfTransition(items: DashboardItem[]) {
+  const preferred = [...items].sort((a, b) => Number(b.area === 'death-cert') - Number(a.area === 'death-cert'));
+  for (const item of preferred) {
+    const normalized = cleanDisplay(item.dateOfDeath);
+    if (normalized) return canonicalKnownDate(normalized) ?? normalized;
+    const value = firstPayloadValue(item, DATE_OF_TRANSITION_KEYS);
+    if (value) return canonicalKnownDate(value) ?? value;
   }
   return null;
 }
@@ -821,10 +834,36 @@ function mediaMatchForItem(item: DashboardItem, knownCase: { key: string; name: 
   };
 }
 
-// Human-readable Date of Transition (date of death). Input is canonical YYYY-MM-DD.
+function parseKnownDateText(raw: string) {
+  const text = cleanDisplay(raw);
+  if (!text) return null;
+  const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const md = text.match(/\b(\d{1,2})[/. -](\d{1,2})[/. -](\d{2,4})\b/);
+  if (md) {
+    const year = Number(md[3].length === 2 ? `20${md[3]}` : md[3]);
+    const month = Number(md[1]);
+    const day = Number(md[2]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const date = new Date(year, month - 1, day, 12);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
+
+function canonicalKnownDate(raw: string) {
+  const date = parseKnownDateText(raw);
+  if (!date) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// Human-readable date display. Parses only explicit date formats; never guesses.
 function formatTransitionDate(raw: string) {
-  const date = new Date(`${raw}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return raw;
+  const date = parseKnownDateText(raw);
+  if (!date) return raw;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
@@ -1480,13 +1519,8 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       counts[item.area] = (counts[item.area] ?? 0) + 1;
       return counts;
     }, {});
-    // Date of Transition (date of death): prefer the death-cert row's captured value, else
-    // any row that carries one. Stays null until staff capture it (no guessing).
     const dateOfBirth = sourceDateOfBirth(sortedItems);
-    const dateOfTransition =
-      sortedItems.find((item) => item.area === 'death-cert' && item.dateOfDeath)?.dateOfDeath ||
-      sortedItems.find((item) => item.dateOfDeath)?.dateOfDeath ||
-      null;
+    const dateOfTransition = sourceDateOfTransition(sortedItems);
 
     const record: CaseRecord = {
       key,
@@ -2201,21 +2235,29 @@ function DeceasedCell({
   const effective = effectiveFamilyContact(record, contactOverrides);
   const contact = contactGridText(effective);
   const hasCandidate = !contact && record.contactCandidates.length > 0;
-  const contactLabel = contact
+  const infoLabel = contact
     ? effective?.overridden
       ? 'Staff contact'
       : 'Source contact'
     : hasCandidate
       ? 'Candidate'
-      : 'Contact needed';
-  const contactName = contact?.primary || (hasCandidate ? record.contactCandidates[0].name : '...');
+      : 'Source coverage';
+  const infoName = contact?.primary ||
+    (hasCandidate ? record.contactCandidates[0].name : `${record.items.length} linked row${record.items.length === 1 ? '' : 's'}`);
+  const infoSecondary = contact?.secondary ||
+    (hasCandidate
+      ? [record.contactCandidates[0].relationship, record.contactCandidates[0].phone, record.contactCandidates[0].email].filter(Boolean).join(' · ')
+      : [
+          record.mediaMatches.length ? `${record.mediaMatches.length} media match${record.mediaMatches.length === 1 ? '' : 'es'}` : '',
+          record.primaryItem.source,
+        ].filter(Boolean).join(' · '));
   const contactTone = contact
     ? effective?.overridden
       ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950'
       : 'border-emerald-200 bg-emerald-50 text-emerald-800'
     : hasCandidate
       ? 'border-blue-200 bg-blue-50 text-blue-800'
-      : 'border-amber-200 bg-amber-50 text-amber-900';
+      : 'border-neutral-200 bg-neutral-50 text-neutral-700';
 
   return (
     <button
@@ -2244,9 +2286,9 @@ function DeceasedCell({
           </div>
         </div>
         <div className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${contactTone}`}>
-          <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{contactLabel}</div>
-          <div className="truncate">{contactName}</div>
-          {contact?.secondary ? <div className="truncate text-[10px] font-normal opacity-80">{contact.secondary}</div> : null}
+          <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{infoLabel}</div>
+          <div className="truncate">{infoName}</div>
+          {infoSecondary ? <div className="truncate text-[10px] font-normal opacity-80">{infoSecondary}</div> : null}
         </div>
       </div>
     </button>
@@ -2862,6 +2904,7 @@ export default function BoardPage() {
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const operationsRequestRef = useRef(0);
+  const detailFetchedKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const syncView = () => {
@@ -2887,7 +2930,12 @@ export default function BoardPage() {
 
   useEffect(() => {
     if (!selectedKey) return;
-    loadOperationsFeed({ caseKey: selectedKey, merge: true, limit: 2000 });
+    if (detailFetchedKeysRef.current.has(selectedKey)) return;
+    const timer = window.setTimeout(() => {
+      detailFetchedKeysRef.current.add(selectedKey);
+      loadOperationsFeed({ caseKey: selectedKey, merge: true, limit: 2000 });
+    }, 50);
+    return () => window.clearTimeout(timer);
   }, [selectedKey]);
 
   function chooseView(view: ViewId) {
@@ -2923,7 +2971,7 @@ export default function BoardPage() {
           return Array.from(byId.values());
         });
         if (!options.merge && response.meta) setFeedMeta(response.meta);
-        setSources(response.sources ?? []);
+        if (!options.merge || response.sources?.length) setSources(response.sources ?? []);
         const itemAuditEntries: AuditEntry[] = (response.item_audit ?? []).map((entry) => ({
           kind: 'edit',
           itemId: entry.item_id,

@@ -610,6 +610,7 @@ type ImportRow = {
   source_ref: string;
   source_payload: Record<string, string>;
   source_content_hash: string;
+  date_of_death: string | null;
   business_date: string | null;
 };
 
@@ -637,6 +638,12 @@ function computeBusinessDate(record: Record<string, string>, dueText: string): s
   return `${year}-${month}-${day}`;
 }
 
+function computeDateOfDeath(record: Record<string, string>): string | null {
+  const parsed = parseSheetDate(record.date_of_death || record.death_date || record.date_of_transition || record.transition_date || record.dod);
+  if (!parsed) return null;
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+}
+
 function importRowFor(item: DashboardItem, record: Record<string, string>, sourceRef = `${item.source}!${record._row_number}`): ImportRow {
   return {
     item_id: item.id,
@@ -656,6 +663,7 @@ function importRowFor(item: DashboardItem, record: Record<string, string>, sourc
       case_match_basis: item.source === 'Arrangements' ? 'arrangement calendar cell' : 'source name field',
     },
     source_content_hash: hashRecord(record),
+    date_of_death: computeDateOfDeath(record),
     business_date: computeBusinessDate(record, item.due),
   };
 }
@@ -684,15 +692,16 @@ async function bulkUpsertItems(rows: ImportRow[]) {
            source_ref text,
            source_payload jsonb,
            source_content_hash text,
+           date_of_death text,
            business_date date
          )
        )
        INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, business_date, updated_at)
+          source_origin, source_ref, source_payload, source_seen_at, source_content_hash, date_of_death, business_date, updated_at)
        SELECT
          item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
-         'google-sheet', source_ref, source_payload, now(), source_content_hash, business_date, now()
+         'google-sheet', source_ref, source_payload, now(), source_content_hash, date_of_death, business_date, now()
        FROM incoming
        ON CONFLICT (item_id) DO UPDATE SET
          area = EXCLUDED.area,
@@ -709,6 +718,7 @@ async function bulkUpsertItems(rows: ImportRow[]) {
          source_payload = EXCLUDED.source_payload,
          source_seen_at = now(),
          source_content_hash = EXCLUDED.source_content_hash,
+         date_of_death = CASE WHEN operational_items.edited_fields ? 'date_of_death' THEN operational_items.date_of_death ELSE EXCLUDED.date_of_death END,
          business_date = EXCLUDED.business_date,
          is_archived = false,
          updated_at = now()`,
