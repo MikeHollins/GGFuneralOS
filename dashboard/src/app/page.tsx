@@ -601,6 +601,12 @@ function itemName(item: DashboardItem) {
 
 function caseKeyForItem(item: DashboardItem) {
   const payload = sourcePayload(item);
+  // Canonical case identity = name + death-year, resolved in the sync (master-sheet-sync.ts).
+  // Prefer it so two different same-name people in different years stay separate cases, and so
+  // name-only logs (cremains/belongings) thread to the right year. Fall back to the name key,
+  // then the raw name, for rows the resolver did not touch (e.g. SMB media).
+  const groupKey = cleanDisplay(payload.case_group_key);
+  if (groupKey) return groupKey;
   const matchKey = cleanDisplay(payload.case_match_key);
   if (matchKey) return matchKey;
   return normalizeKey(itemName(item)) || item.id;

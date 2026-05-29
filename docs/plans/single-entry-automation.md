@@ -66,6 +66,12 @@ Per owner directive "use Golden Gate's system and adapt ours to theirs." Their s
 
 Remaining Phase 1 work (pending): implement the name-primary tiered resolver with the above guards, and surface `NN-NNN` as a display/disambiguation attribute. Name-key exists for 100% of rows; case number for ~72% (death-cert/crematory only).
 
+### Phase 1 identity resolver — STEP 1 (data layer) COMPLETED + VERIFIED 2026-05-29
+
+Commit `c1378eb`, deployed (`7pftxn4ru`), re-synced (run `6d14087d`), verified on live Neon. `applyCaseIdentity()` (two-phase, canonical, in `master-sheet-sync.ts`) now writes `case_group_key` (name|death-year), `case_year`, `identity_status`, `identity_basis` into `source_payload`. Live distribution: resolved 11,199 · bridged 2,959 · date-year 608 · name-only 177 · **unverified 96 (flagged, not merged)** · SMB-only 549 (untouched). Fail-closed proof: case `21-049` (two people sharing one number) split into `bermudez jorge|2021` and `came stephenson|2021` — no merge.
+
+STEP 2 (UI, pending): point `caseKeyForItem` (page.tsx:602) at `case_group_key` (fallback to `case_match_key`), display the `NN-NNN` number, and surface an `unverified` badge for director review. Pure dashboard change — zero impact on Golden Gate's side.
+
 
 Resolve the dual-model collision (`operational_items` vs legacy `cases`); document the canonical choice. Identity resolution is **tiered**, never `case_match_key` alone:
 
