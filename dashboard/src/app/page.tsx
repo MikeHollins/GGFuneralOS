@@ -1730,7 +1730,7 @@ function WorkflowChecklist({
       <div className="border-b border-neutral-200 px-3 py-2">
         <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
       </div>
-      <div className="columns-1 gap-2 p-3 md:columns-2 xl:columns-4">
+      <div className="grid grid-cols-1 gap-2 p-3">
         {familyWorkflow.map((step) => {
           const relatedItems = workflowItemsFor(record, step);
           const primary = relatedItems[0] ?? null;
@@ -1746,7 +1746,7 @@ function WorkflowChecklist({
           return (
             <div
               key={step.id}
-              className={`relative mb-2 break-inside-avoid rounded-lg border transition focus-within:z-10 focus-within:shadow-lg ${
+              className={`rounded-lg border transition ${
                 gap ? 'border-red-300 bg-red-50/50' : done ? 'border-emerald-200 bg-emerald-50/40' : 'border-neutral-200 bg-white'
               }`}
             >
@@ -1771,7 +1771,7 @@ function WorkflowChecklist({
                 </span>
               </button>
 
-              <div className={`${open ? 'block' : 'hidden'} absolute left-0 top-[calc(100%+4px)] z-50 w-[min(28rem,calc(100vw-2rem))] space-y-2 rounded-lg border border-neutral-200 bg-white p-2 shadow-xl`}>
+              <div className={`${open ? 'block' : 'hidden'} space-y-2 border-t border-neutral-200 p-2`}>
                   <div className="flex items-center gap-1">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Step</span>
                     <button type="button" onClick={() => { const initials = promptInitials(); if (initials) onToggleStep(record, step, 'done', initials); }} className="ml-auto h-7 rounded-md bg-emerald-600 px-2 text-[11px] font-semibold text-white">Done</button>
@@ -1914,94 +1914,87 @@ function DetailDrawer({
           </div>
         </div>
 
-        <div className="grid h-[calc(100dvh-73px)] gap-3 overflow-auto p-3 xl:grid-cols-[minmax(460px,1.15fr)_minmax(420px,1fr)_minmax(360px,0.85fr)] xl:grid-rows-[auto_minmax(0,1fr)] xl:overflow-hidden">
+        {/* No page scroll: fixed-height body. Primary editables (Schedule + Status) are
+            always visible; secondary sections are collapsed boxes that expand in place and
+            scroll only inside themselves when opened on a large case. */}
+        <div className="flex h-[calc(100dvh-73px)] flex-col gap-3 overflow-hidden p-3">
           {detailLoading ? (
-            <div className="xl:col-span-3 -mb-1 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-2 text-xs font-semibold text-neutral-800">
+            <div className="shrink-0 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
               Loading all linked rows and files for this family.
             </div>
           ) : null}
-          <div className="flex min-h-0 flex-col gap-3 xl:col-span-2">
-            <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
-            <WorkflowChecklist
-              record={record}
-              statusOverrides={statusOverrides}
-              workflowOverrides={workflowOverrides}
-              onCommit={onCommit}
-              onUpdate={onUpdate}
-              onToggleStep={onToggleStep}
-            />
-          </div>
+          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-3">
+            {/* Primary: editable schedule + status (always open) */}
+            <div className="flex min-h-0 flex-col gap-3 lg:col-span-2">
+              <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
+              <div className="min-h-0 flex-1 overflow-auto">
+                <WorkflowChecklist
+                  record={record}
+                  statusOverrides={statusOverrides}
+                  workflowOverrides={workflowOverrides}
+                  onCommit={onCommit}
+                  onUpdate={onUpdate}
+                  onToggleStep={onToggleStep}
+                />
+              </div>
+            </div>
 
-          <section className="grid min-h-0 gap-3 overflow-auto xl:col-start-3 xl:row-span-2">
-            <div className="rounded-lg border border-neutral-200 p-3">
-              <h3 className="text-sm font-bold text-neutral-950">Date and time options</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                {record.dateEntries.length ? record.dateEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
-                    <div className="font-semibold text-neutral-900">{entry.label}</div>
-                    <div className="text-neutral-700">{entry.value}</div>
-                    <div className="text-xs text-neutral-400">{entry.source}</div>
-                  </div>
-                )) : <div className="py-3 text-sm text-neutral-500">No date or time values found.</div>}
-              </div>
-            </div>
-            <div className="rounded-lg border border-neutral-200 p-3">
-              <h3 className="text-sm font-bold text-neutral-950">Location options</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                {record.locationEntries.length ? record.locationEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
-                    <div className="font-semibold text-neutral-900">{entry.label}</div>
-                    <div className="break-words text-neutral-700">{entry.value}</div>
-                    <div className="text-xs text-neutral-400">{entry.source}</div>
-                  </div>
-                )) : <div className="py-3 text-sm text-neutral-500">No location values found.</div>}
-              </div>
-            </div>
-            <div className="rounded-lg border border-neutral-200 p-3">
-              <h3 className="text-sm font-bold text-neutral-950">Service staff</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
-                {record.serviceStaffEntries.length ? record.serviceStaffEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
-                    <div className="font-semibold text-neutral-900">{entry.label}</div>
-                    <div className="break-words text-neutral-700">{entry.value}</div>
-                    <div className="text-xs text-neutral-400">{entry.source}</div>
-                  </div>
-                )) : <div className="py-3 text-sm text-neutral-500">No service staff values found.</div>}
-              </div>
-            </div>
-            <div className="rounded-lg border border-neutral-200 p-3">
-              <h3 className="text-sm font-bold text-neutral-950">Service logistics</h3>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                {record.serviceLogisticsEntries.length ? record.serviceLogisticsEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="rounded-md bg-neutral-50 px-2 py-1.5 text-sm">
-                    <div className="font-semibold text-neutral-900">{entry.label}</div>
-                    <div className="break-words text-neutral-700">{entry.value}</div>
-                    <div className="text-xs text-neutral-400">{entry.source}</div>
-                  </div>
-                )) : <div className="py-3 text-sm text-neutral-500">No service logistics values found.</div>}
-              </div>
-            </div>
-            <div className="rounded-lg border border-neutral-200">
-              <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</div>
-              <div className="max-h-64 divide-y divide-neutral-100 overflow-auto">
-                {auditEntries.filter((entry) => record.items.some((item) => item.id === entry.itemId)).slice(0, 12).map((entry) => (
-                  <div key={`${entry.changedAt}-${entry.itemId}-${entry.fieldName ?? entry.to}`} className="px-3 py-2 text-xs text-neutral-600">
-                    <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
-                    {' changed '}
-                    {entry.from ? <span>from {entry.from} </span> : null}
-                    {entry.to ? <span>to {entry.to} </span> : null}
-                    <span>on {formatStamp(entry.changedAt)}</span>
-                    {entry.initials ? <span> by {entry.initials}</span> : null}
-                    {entry.staffName ? <span> by {entry.staffName}</span> : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
+            {/* Secondary: collapsible boxes (expand in place; only this column ever scrolls) */}
+            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+              <details open className="shrink-0 rounded-lg border border-neutral-200">
+                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Recent audit</summary>
+                <div className="max-h-56 divide-y divide-neutral-100 overflow-auto border-t border-neutral-200">
+                  {(() => {
+                    const caseAudit = auditEntries
+                      .filter((entry) => record.items.some((item) => item.id === entry.itemId) || entry.itemId.startsWith(`${record.key}:`))
+                      .slice(0, 20);
+                    return caseAudit.length ? (
+                      caseAudit.map((entry) => (
+                        <div key={`${entry.changedAt}-${entry.itemId}-${entry.fieldName ?? entry.to}`} className="px-3 py-2 text-xs text-neutral-600">
+                          <span className="font-semibold text-neutral-900">{entry.fieldName ? displayKey(entry.fieldName) : 'Status'}</span>
+                          {' changed '}
+                          {entry.from ? <span>from {entry.from} </span> : null}
+                          {entry.to ? <span>to {entry.to} </span> : null}
+                          <span>on {formatStamp(entry.changedAt)}</span>
+                          {entry.initials ? <span> by {entry.initials}</span> : null}
+                          {entry.staffName ? <span> by {entry.staffName}</span> : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="px-3 py-3 text-xs italic text-neutral-400">No staff edits recorded for this family yet.</div>
+                    );
+                  })()}
+                </div>
+              </details>
 
-          <section className="min-h-0 overflow-auto rounded-lg border border-neutral-200 xl:col-span-2">
-            <div className="border-b border-neutral-200 px-3 py-2 text-sm font-bold text-neutral-950">Related work</div>
-            <div className="divide-y divide-neutral-100">
+              <details className="shrink-0 rounded-lg border border-neutral-200">
+                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Source details (read-only)</summary>
+                <div className="max-h-72 space-y-2 overflow-auto border-t border-neutral-200 p-2">
+                  {[
+                    { t: 'Dates & times', e: record.dateEntries, empty: 'No date or time values found.' },
+                    { t: 'Locations', e: record.locationEntries, empty: 'No location values found.' },
+                    { t: 'Service staff', e: record.serviceStaffEntries, empty: 'No service staff values found.' },
+                    { t: 'Service logistics', e: record.serviceLogisticsEntries, empty: 'No service logistics values found.' },
+                  ].map((grp) => (
+                    <div key={grp.t} className="rounded-md border border-neutral-200 p-2">
+                      <h4 className="text-xs font-bold text-neutral-700">{grp.t}</h4>
+                      <div className="mt-1 grid gap-1">
+                        {grp.e.length ? grp.e.map((entry, index) => (
+                          <div key={`${entry.label}-${index}`} className="rounded bg-neutral-50 px-2 py-1 text-xs">
+                            <span className="font-semibold text-neutral-600">{entry.label}: </span>
+                            <span className="break-words text-neutral-800">{entry.value}</span>
+                            <span className="ml-1 text-[10px] text-neutral-400">{entry.source}</span>
+                          </div>
+                        )) : <div className="text-xs italic text-neutral-400">{grp.empty}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+
+              <details className="flex min-h-0 flex-col rounded-lg border border-neutral-200">
+                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-bold text-neutral-950">Related work ({record.items.length})</summary>
+                <div className="max-h-[60vh] divide-y divide-neutral-100 overflow-auto border-t border-neutral-200">
               {record.items.map((item) => (
                 <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
                   <div className="min-w-0">
@@ -2046,8 +2039,10 @@ function DetailDrawer({
                   </div>
                 </div>
               ))}
+                </div>
+              </details>
             </div>
-          </section>
+          </div>
         </div>
       </aside>
     </div>
