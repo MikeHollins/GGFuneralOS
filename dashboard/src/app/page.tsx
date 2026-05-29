@@ -68,6 +68,7 @@ type WorkflowStepDefinition = {
   id: string;
   label: string;
   shortLabel: string;
+  gridLabel: string;
   hint: string;
   terms: string[];
   areas: OperationArea[];
@@ -202,6 +203,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'first-call',
     label: 'First call',
     shortLabel: 'Call',
+    gridLabel: 'First Call',
     hint: 'Initial call / removal request received',
     terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'place of death'],
     areas: ['death-cert', 'paperwork'],
@@ -211,6 +213,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'first-meeting',
     label: 'First meeting',
     shortLabel: 'Meet',
+    gridLabel: 'Meeting',
     hint: 'Family arrangement conference held',
     terms: ['arrangement', 'appointment', 'meeting', 'conference'],
     areas: ['arrangement'],
@@ -220,6 +223,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'pickup',
     label: 'Body pickup',
     shortLabel: 'Pick',
+    gridLabel: 'Pickup',
     hint: 'Body in our custody / at crematory',
     terms: ['pickup', 'pick up', 'removal', 'body', 'transfer', 'mokan'],
     areas: ['crematory'],
@@ -229,6 +233,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'selection',
     label: 'Service selection',
     shortLabel: 'Svc',
+    gridLabel: 'Service',
     hint: 'Service type & merchandise selected',
     terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
     areas: ['service', 'arrangement'],
@@ -238,6 +243,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'media-program',
     label: 'Media and program',
     shortLabel: 'Media',
+    gridLabel: 'Media',
     hint: 'Program / obituary / media prepared',
     terms: ['media', 'photo', 'program', 'obituary', 'design', 'print', 'production'],
     areas: ['production'],
@@ -247,6 +253,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'death-cert',
     label: 'Death certificate',
     shortLabel: 'DC',
+    gridLabel: 'Death Certificate',
     hint: 'MoEVR death certificate filed',
     terms: ['death cert', 'certificate', 'doctor', 'medical', 'registrar', 'filed', 'dr name'],
     areas: ['death-cert'],
@@ -256,6 +263,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'disposition',
     label: 'Service / disposition',
     shortLabel: 'Disp',
+    gridLabel: 'Disposition',
     hint: 'Cremation or burial completed',
     terms: ['service', 'cremation', 'crematory', 'cremains', 'burial', 'cemetery', 'committal'],
     areas: ['service', 'crematory', 'cremains'],
@@ -265,6 +273,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'closeout',
     label: 'Closeout',
     shortLabel: 'Close',
+    gridLabel: 'Closeout',
     hint: 'Cremains/belongings released, paid, closed',
     terms: ['payment', 'contract', 'belongings', 'release', 'aftercare', 'picked up', 'paperwork'],
     areas: ['belongings', 'cremains'],
@@ -1181,10 +1190,10 @@ function WorkflowStepButton({
           state.done ? 'Done' : state.gap ? 'Needs attention — a later step is already done' : 'Not done'
         }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to set.`}
         aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to set.`}
-        className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-bold leading-none transition ${tone}`}
+        className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold leading-tight transition ${tone}`}
       >
         <span
-          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${
+          className={`flex h-3 w-3 shrink-0 items-center justify-center rounded border text-[8px] ${
             state.done
               ? 'border-emerald-600 bg-emerald-600 text-white'
               : state.gap
@@ -1194,8 +1203,8 @@ function WorkflowStepButton({
         >
           {state.gap && !state.done ? '!' : '✓'}
         </span>
-        <span className="truncate">{state.step.shortLabel}</span>
-        {state.overridden ? <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
+        <span className="min-w-0 flex-1 truncate">{state.step.gridLabel}</span>
+        {state.overridden ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
       </button>
       {open ? (
         <>
@@ -1255,15 +1264,13 @@ function WorkflowProgressCell({
   onOpenDetails: () => void;
 }) {
   const doneCount = states.filter((state) => state.done).length;
-  const firstGap = states.find((state) => state.gap);
-  const nextNeeded = states.find((state) => !state.done && !state.gap) ?? states.find((state) => !state.done);
 
   return (
     <div className="px-2 py-1.5">
       <GridDeathCertPill record={record} statusOverrides={statusOverrides} />
-      {/* Two rows of titled step boxes — hover any box for what it means and its state.
-          The open (amber) and red (gap) boxes ARE the next action; no separate column. */}
-      <div className="grid grid-cols-4 gap-1">
+      {/* Compact checklist of funeral-home work items (click any to toggle). The open/red
+          boxes ARE the next action — no separate next-action line. */}
+      <div className="grid grid-cols-2 gap-1">
         {states.map((state) => (
           <WorkflowStepButton
             key={state.step.id}
@@ -1274,16 +1281,9 @@ function WorkflowProgressCell({
           />
         ))}
       </div>
-      <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] font-semibold text-neutral-500">
-        <span className="shrink-0">{doneCount}/{states.length}</span>
-        {firstGap ? (
-          <span className="min-w-0 truncate text-red-600" title={`Gap: ${firstGap.step.label}`}>⚠ {firstGap.step.shortLabel}</span>
-        ) : nextNeeded ? (
-          <span className="min-w-0 truncate text-neutral-600" title={`Next: ${nextNeeded.step.label}`}>→ {nextNeeded.step.shortLabel}</span>
-        ) : (
-          <span className="shrink-0 text-emerald-600">✓ complete</span>
-        )}
-        {record.updatedAt ? <span className="ml-auto shrink-0 text-neutral-400">{record.updatedAt}</span> : null}
+      <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] font-medium text-neutral-400">
+        <span className="shrink-0">{doneCount}/{states.length} done</span>
+        {record.updatedAt ? <span className="ml-auto shrink-0">{record.updatedAt}</span> : null}
       </div>
     </div>
   );
@@ -2522,7 +2522,7 @@ export default function BoardPage() {
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
             <div className="px-2 py-2 max-xl:hidden">Family Contact</div>
-            <div className="px-2 py-2">Status &amp; next step</div>
+            <div className="px-2 py-2 text-center">Status</div>
           </div>
 
           <div className="divide-y divide-neutral-100">
