@@ -94,6 +94,8 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
       OR lower(source) LIKE $${index}
       OR lower(coalesce(source_ref, '')) LIKE $${index}
       OR lower(source_payload::text) LIKE $${index}
+      OR lower(coalesce(date_of_death, '')) LIKE $${index}
+      OR lower(coalesce(to_char(NULLIF(date_of_death, '')::date, 'FMMonth FMDD, YYYY'), '')) LIKE $${index}
     )`);
   }
 

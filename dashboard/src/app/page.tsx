@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode } from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   getOperationalStatuses,
@@ -56,7 +55,7 @@ type CaseRecord = {
   serviceStaffEntries: MenuEntry[];
   serviceLogisticsEntries: MenuEntry[];
   owner: string;
-  nextAction: string;
+  dateOfTransition: string | null;
   blocker: string;
   updatedAt: string;
   areaCounts: Partial<Record<OperationArea, number>>;
@@ -67,6 +66,7 @@ type WorkflowStepDefinition = {
   id: string;
   label: string;
   shortLabel: string;
+  hint: string;
   terms: string[];
   areas: OperationArea[];
   keys: string[];
@@ -175,6 +175,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'first-call',
     label: 'First call',
     shortLabel: 'Call',
+    hint: 'Initial call / removal request received',
     terms: ['first call', '1st call', 'call sheet', 'initial call', 'intake', 'hospice', 'place of death'],
     areas: ['death-cert', 'paperwork'],
     keys: ['case', 'place_of_death', 'hospice_nurse', 'phone', 'other_info'],
@@ -183,6 +184,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'first-meeting',
     label: 'First meeting',
     shortLabel: 'Meet',
+    hint: 'Family arrangement conference held',
     terms: ['arrangement', 'appointment', 'meeting', 'conference'],
     areas: ['arrangement'],
     keys: ['arrangement_date', 'appointment_date', 'appointment_time', 'arrangement_location', 'package', 'contract'],
@@ -191,6 +193,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'pickup',
     label: 'Body pickup',
     shortLabel: 'Pick',
+    hint: 'Body in our custody / at crematory',
     terms: ['pickup', 'pick up', 'removal', 'body', 'transfer', 'mokan'],
     areas: ['crematory'],
     keys: ['date_of_cremation', 'pick_up_date', 'place_of_death', 'mokan', 'column_3', 'other_info'],
@@ -199,6 +202,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'selection',
     label: 'Service selection',
     shortLabel: 'Svc',
+    hint: 'Service type & merchandise selected',
     terms: ['service selection', 'service type', 'chapel', 'church', 'cemetery', 'cremation', 'burial'],
     areas: ['service', 'arrangement'],
     keys: ['service_type', 'disposition_type', 'service_date', 'service_time', 'service_location', 'cemetery', 'crematory', 'date', 'time', 'location', 'lead', 'lady', 'call', 'hearse', 'limo'],
@@ -207,6 +211,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'media-program',
     label: 'Media and program',
     shortLabel: 'Media',
+    hint: 'Program / obituary / media prepared',
     terms: ['media', 'photo', 'program', 'obituary', 'design', 'print', 'production'],
     areas: ['production'],
     keys: ['relative_path', 'parent_path', 'extension', 'modified_at', 'size_bytes'],
@@ -215,6 +220,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'death-cert',
     label: 'Death certificate',
     shortLabel: 'DC',
+    hint: 'MoEVR death certificate filed',
     terms: ['death cert', 'certificate', 'doctor', 'medical', 'registrar', 'filed', 'dr name'],
     areas: ['death-cert'],
     keys: ['case', 'dr_name', 'hospice_nurse', 'place_of_death', 'state', 'c_j_email_dc'],
@@ -223,6 +229,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'disposition',
     label: 'Service / disposition',
     shortLabel: 'Disp',
+    hint: 'Cremation or burial completed',
     terms: ['service', 'cremation', 'crematory', 'cremains', 'burial', 'cemetery', 'committal'],
     areas: ['service', 'crematory', 'cremains'],
     keys: ['date_of_cremation', 'date_of_return', 'pick_up_date', 'mokan', 'paid', 'urn', 'property'],
@@ -231,6 +238,7 @@ const familyWorkflow: WorkflowStepDefinition[] = [
     id: 'closeout',
     label: 'Closeout',
     shortLabel: 'Close',
+    hint: 'Cremains/belongings released, paid, closed',
     terms: ['payment', 'contract', 'belongings', 'release', 'aftercare', 'picked up', 'paperwork'],
     areas: ['belongings', 'cremains'],
     keys: ['paid', 'property', 'urn', 'date_of_return', 'pick_up_date', 'signature_of_receiver'],
@@ -568,17 +576,11 @@ function ownerFor(items: DashboardItem[]) {
   );
 }
 
-function nextActionFor(items: DashboardItem[]) {
-  const urgent = [...items].sort((a, b) => priorityRank(b) - priorityRank(a))[0];
-  if (!urgent) return 'Review case';
-  const status = urgent.status.toLowerCase();
-  if (status.includes('not started') || status.includes('needs') || status.includes('missing')) return `Resolve ${urgent.source}`;
-  if (status.includes('pending') || status.includes('called') || status.includes('requested')) return `Follow up on ${urgent.source}`;
-  if (urgent.area === 'death-cert') return 'Check death certificate';
-  if (urgent.area === 'cremains' || urgent.area === 'crematory') return 'Check cremains status';
-  if (urgent.area === 'belongings') return 'Check belongings release';
-  if (urgent.source.startsWith('SMB:')) return 'Review related file';
-  return urgent.detail || 'Review case';
+// Human-readable Date of Transition (date of death). Input is canonical YYYY-MM-DD.
+function formatTransitionDate(raw: string) {
+  const date = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function blockerFor(items: DashboardItem[]) {
@@ -654,6 +656,12 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       counts[item.area] = (counts[item.area] ?? 0) + 1;
       return counts;
     }, {});
+    // Date of Transition (date of death): prefer the death-cert row's captured value, else
+    // any row that carries one. Stays null until staff capture it (no guessing).
+    const dateOfTransition =
+      sortedItems.find((item) => item.area === 'death-cert' && item.dateOfDeath)?.dateOfDeath ||
+      sortedItems.find((item) => item.dateOfDeath)?.dateOfDeath ||
+      null;
 
     const record: CaseRecord = {
       key,
@@ -666,7 +674,7 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
       serviceStaffEntries,
       serviceLogisticsEntries,
       owner: ownerFor(sortedItems),
-      nextAction: nextActionFor(sortedItems),
+      dateOfTransition,
       blocker: blockerFor(sortedItems),
       updatedAt: lastUpdatedFor(sortedItems, auditEntries),
       areaCounts,
@@ -676,9 +684,11 @@ function buildCases(items: DashboardItem[], auditEntries: AuditEntry[]) {
     record.searchText = [
       record.name,
       record.owner,
-      record.nextAction,
       record.blocker,
       key,
+      // Make the displayed Date of Transition searchable (raw + human-readable).
+      dateOfTransition ?? '',
+      dateOfTransition ? formatTransitionDate(dateOfTransition) : '',
       ...sortedItems.flatMap((item) => [item.label, item.detail, item.source, item.sourceRef ?? '', ...Object.values(sourcePayload(item))]),
     ].join(' ').toLowerCase();
     return record;
@@ -692,16 +702,6 @@ function recordMatchesView(record: CaseRecord, view: ViewId, statusOverrides: Re
   const filters = viewAreaFilters[view];
   if (!filters) return true;
   return record.items.some((item) => filters.includes(item.area) || (filters.includes('smb') && item.source.startsWith('SMB:')));
-}
-
-function readinessBadges(record: CaseRecord) {
-  return [
-    { label: 'Arr', active: Boolean(record.areaCounts.arrangement), tone: 'bg-blue-50 text-blue-800 border-blue-200' },
-    { label: 'DC', active: Boolean(record.areaCounts['death-cert']), tone: 'bg-red-50 text-red-800 border-red-200' },
-    { label: 'Crem', active: Boolean(record.areaCounts.cremains || record.areaCounts.crematory), tone: 'bg-amber-50 text-amber-900 border-amber-200' },
-    { label: 'Bel', active: Boolean(record.areaCounts.belongings), tone: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
-    { label: 'Files', active: record.items.some((item) => item.source.startsWith('SMB:')), tone: 'bg-neutral-100 text-neutral-700 border-neutral-200' },
-  ];
 }
 
 function searchableItemText(item: DashboardItem) {
@@ -907,25 +907,6 @@ function effectiveWorkflowStates(
   return base.map((state, index) => ({ ...state, gap: !state.done && index < lastDoneIdx }));
 }
 
-function WorkflowGlyph({ stepId }: { stepId: string }) {
-  const common = { fill: 'none', stroke: 'currentColor', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, strokeWidth: 2 };
-  const paths: Record<string, ReactNode> = {
-    'first-call': <path {...common} d="M7 5h4l1 4-2 1a12 12 0 0 0 4 4l1-2 4 1v4c0 1-1 2-2 2A14 14 0 0 1 5 7c0-1 1-2 2-2Z" />,
-    'first-meeting': <path {...common} d="M8 6V4m8 2V4M5 9h14M7 6h10a2 2 0 0 1 2 2v10H5V8a2 2 0 0 1 2-2Zm3 7h4" />,
-    pickup: <path {...common} d="M4 13V7h9v6m0-3h4l3 3v4h-2m-12 0H4v-4h16m-12 4a2 2 0 1 0 4 0m4 0a2 2 0 1 0 4 0" />,
-    selection: <path {...common} d="M6 19V9l6-4 6 4v10m-9 0v-6h6v6" />,
-    'media-program': <path {...common} d="M5 6h14v12H5zM8 15l3-3 2 2 2-3 3 4M9 9h.01" />,
-    'death-cert': <path {...common} d="M7 4h8l4 4v12H7zM15 4v5h4M10 13h6M10 17h4" />,
-    disposition: <path {...common} d="M12 4v16m-6-6h12M8 8l4-4 4 4M8 16l4 4 4-4" />,
-    closeout: <path {...common} d="m5 13 4 4L19 7M6 6h10M6 10h7" />,
-  };
-
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0">
-      {paths[stepId] ?? <circle {...common} cx="12" cy="12" r="7" />}
-    </svg>
-  );
-}
 
 type ToggleStep = (
   record: CaseRecord,
@@ -1009,24 +990,25 @@ function WorkflowStepButton({
         ref={triggerRef}
         type="button"
         onClick={openMenu}
-        title={`${state.step.label}: ${state.summary}${state.overridden ? ' (set by staff)' : ' (auto)'}`}
-        aria-label={`${state.step.label} ${state.done ? 'done' : state.gap ? 'gap' : 'needed'} for ${record.name}. Click to set.`}
-        className={`inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[10px] font-bold transition ${tone}`}
+        title={`${state.step.label} — ${state.step.hint}. ${
+          state.done ? 'Done' : state.gap ? 'Needs attention — a later step is already done' : 'Not done'
+        }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to set.`}
+        aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to set.`}
+        className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-bold leading-none transition ${tone}`}
       >
         <span
-          className={`flex h-3.5 w-3.5 items-center justify-center rounded border text-[9px] ${
+          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[9px] ${
             state.done
               ? 'border-emerald-600 bg-emerald-600 text-white'
               : state.gap
                 ? 'border-red-500 bg-red-500 text-white'
-                : 'border-current bg-white/70 text-transparent'
+                : 'border-neutral-400 bg-white text-neutral-300'
           }`}
         >
           {state.gap && !state.done ? '!' : '✓'}
         </span>
-        <WorkflowGlyph stepId={state.step.id} />
-        <span className="hidden lg:inline">{state.step.shortLabel}</span>
-        {state.overridden ? <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
+        <span className="truncate">{state.step.shortLabel}</span>
+        {state.overridden ? <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
       </button>
       {open ? (
         <>
@@ -1075,11 +1057,13 @@ function WorkflowStepButton({
 function WorkflowProgressCell({
   record,
   states,
+  statusOverrides,
   onToggleStep,
   onOpenDetails,
 }: {
   record: CaseRecord;
   states: EffectiveStepState[];
+  statusOverrides: Record<string, StatusOverride>;
   onToggleStep: ToggleStep;
   onOpenDetails: () => void;
 }) {
@@ -1089,7 +1073,10 @@ function WorkflowProgressCell({
 
   return (
     <div className="px-2 py-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">
+      <GridDeathCertPill record={record} statusOverrides={statusOverrides} />
+      {/* Two rows of titled step boxes — hover any box for what it means and its state.
+          The open (amber) and red (gap) boxes ARE the next action; no separate column. */}
+      <div className="grid grid-cols-4 gap-1">
         {states.map((state) => (
           <WorkflowStepButton
             key={state.step.id}
@@ -1103,9 +1090,9 @@ function WorkflowProgressCell({
       <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-neutral-500">
         <span className="shrink-0">{doneCount}/{states.length} done</span>
         {firstGap ? (
-          <span className="min-w-0 truncate text-red-600">gap: {firstGap.step.shortLabel}</span>
+          <span className="min-w-0 truncate text-red-600">next: {firstGap.step.label}</span>
         ) : nextNeeded ? (
-          <span className="min-w-0 truncate">next: {nextNeeded.step.shortLabel}</span>
+          <span className="min-w-0 truncate">next: {nextNeeded.step.label}</span>
         ) : (
           <span className="shrink-0 text-emerald-600">complete</span>
         )}
@@ -2267,13 +2254,12 @@ export default function BoardPage() {
 
       <main className="p-3">
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(330px,1.85fr)_minmax(180px,0.9fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(300px,1.65fr)_minmax(150px,0.9fr)] max-lg:hidden">
+          <div className="grid grid-cols-[minmax(170px,1.2fr)_minmax(150px,0.85fr)_minmax(150px,0.85fr)_minmax(110px,0.6fr)_minmax(380px,2.4fr)] border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(140px,0.85fr)_minmax(340px,2.4fr)] max-lg:hidden">
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
             <div className="px-2 py-2 max-xl:hidden">Family Contact</div>
-            <div className="px-2 py-2">Status</div>
-            <div className="px-2 py-2">Next Action</div>
+            <div className="px-2 py-2">Status &amp; next step</div>
           </div>
 
           <div className="divide-y divide-neutral-100">
@@ -2288,7 +2274,7 @@ export default function BoardPage() {
             ) : visibleRecords.length ? visibleRecords.map((record) => (
               <div
                 key={record.key}
-                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(145px,0.8fr)_minmax(145px,0.85fr)_minmax(90px,0.45fr)_minmax(330px,1.85fr)_minmax(180px,0.9fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(130px,0.85fr)_minmax(300px,1.65fr)_minmax(150px,0.9fr)] max-lg:block"
+                className="grid w-full grid-cols-[minmax(170px,1.2fr)_minmax(150px,0.85fr)_minmax(150px,0.85fr)_minmax(110px,0.6fr)_minmax(380px,2.4fr)] items-stretch text-left transition hover:bg-[#faf9f9] max-xl:grid-cols-[minmax(180px,1.35fr)_minmax(150px,0.9fr)_minmax(140px,0.85fr)_minmax(340px,2.4fr)] max-lg:block"
               >
                 <button
                   type="button"
@@ -2297,10 +2283,13 @@ export default function BoardPage() {
                   aria-label={`Open details for ${record.name}`}
                 >
                   <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {readinessBadges(record).filter((badge) => badge.active).map((badge) => (
-                      <span key={badge.label} className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${badge.tone}`}>{badge.label}</span>
-                    ))}
+                  <div className="mt-0.5 text-xs text-neutral-600">
+                    <span className="text-neutral-400">Date of transition: </span>
+                    {record.dateOfTransition ? (
+                      formatTransitionDate(record.dateOfTransition)
+                    ) : (
+                      <span className="italic text-neutral-400">Date pending</span>
+                    )}
                   </div>
                 </button>
                 <div className="px-1 py-1.5"><MenuCell label="Date and time options" entries={record.dateEntries} /></div>
@@ -2309,13 +2298,10 @@ export default function BoardPage() {
                 <WorkflowProgressCell
                   record={record}
                   states={workflowStateByKey.get(record.key) ?? []}
+                  statusOverrides={statusOverrides}
                   onToggleStep={commitWorkflowStep}
                   onOpenDetails={() => setSelectedKey(record.key)}
                 />
-                <div className="px-2 py-2 text-xs leading-5 text-neutral-700">
-                  <GridDeathCertPill record={record} statusOverrides={statusOverrides} />
-                  <div className="line-clamp-2">{record.nextAction}</div>
-                </div>
               </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">
