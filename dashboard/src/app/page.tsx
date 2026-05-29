@@ -1699,7 +1699,10 @@ export default function BoardPage() {
 
   useEffect(() => {
     if (!items.length) return;
-    getOperationalStatuses(items.map((item) => item.id).slice(0, 1000))
+    // Load ALL status overrides, not the first 1,000 item IDs. Overrides are bounded by
+    // what staff have actually changed (small), so fetching the full set avoids stale
+    // status / wrong checklist counts for records beyond the old cap as the index grows.
+    getOperationalStatuses()
       .then((response) => {
         const nextOverrides: Record<string, StatusOverride> = {};
         for (const status of response.data) {
