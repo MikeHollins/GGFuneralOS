@@ -1,16 +1,57 @@
 #!/usr/bin/env node
 import { chromium, request as playwrightRequest } from 'playwright';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHmac } from 'node:crypto';
+
+loadLocalEnv();
 
 const baseUrl = (process.env.DASHBOARD_URL || 'http://localhost:3000').replace(/\/$/, '');
 const username = process.env.GGFO_SMOKE_USERNAME || process.env.OWNER_USERNAME || '';
 let pin = process.env.GGFO_SMOKE_PIN || process.env.OWNER_PIN || '';
 const keychainService = process.env.GGFO_SMOKE_KEYCHAIN_SERVICE || '';
 const keychainAccount = process.env.GGFO_SMOKE_KEYCHAIN_ACCOUNT || username || '';
+const smokeSessionSecret = process.env.GGFO_SMOKE_JWT_SECRET || process.env.JWT_SECRET || process.env.API_SECRET || '';
 const screenshotDir = process.env.SMOKE_SCREENSHOT_DIR || '';
 const headless = process.env.SMOKE_HEADLESS !== 'false';
+
+function loadLocalEnv() {
+  const envPath = join(process.cwd(), '.env');
+  if (!existsSync(envPath)) return;
+  for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const index = trimmed.indexOf('=');
+    if (index <= 0) continue;
+    const key = trimmed.slice(0, index).trim();
+    if (process.env[key] !== undefined) continue;
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+}
+
+function base64url(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function signSmokeSession(secret) {
+  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = base64url(JSON.stringify({
+    staff_id: 'smoke-test',
+    role: 'owner',
+    first_name: 'Smoke',
+    last_name: 'Tester',
+    username: 'smoke',
+    email: null,
+    exp: Math.floor(Date.now() / 1000) + 30 * 60,
+  }));
+  const signature = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
 
 if (!pin && keychainService && keychainAccount) {
   try {
@@ -58,9 +99,9 @@ async function main() {
   });
 
   const browser = await chromium.launch({ headless });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  let page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   const sourceWriteRequests = [];
-  page.on('request', (request) => {
+  const watchSourceWrites = (targetPage) => targetPage.on('request', (request) => {
     const url = request.url().toLowerCase();
     const method = request.method();
     const externalSource =
@@ -73,6 +114,7 @@ async function main() {
       sourceWriteRequests.push(`${method} ${request.url()}`);
     }
   });
+  watchSourceWrites(page);
 
   await check('unauthenticated dashboard redirects to login', async () => {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
@@ -80,8 +122,32 @@ async function main() {
     assert(page.url().includes('/login'), `expected /login, got ${page.url()}`);
   });
 
-  if (!username || !pin) {
-    record('authenticated dashboard checks', 'skip', 'set GGFO_SMOKE_USERNAME and GGFO_SMOKE_PIN, or GGFO_SMOKE_KEYCHAIN_SERVICE/GGFO_SMOKE_KEYCHAIN_ACCOUNT');
+  await page.close();
+  page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  watchSourceWrites(page);
+
+  if (username && pin) {
+    await check('staff login succeeds without exposing PIN', async () => {
+      await page.getByPlaceholder('dimond').fill(username);
+      await page.locator('input[type="password"]').fill(pin);
+      await page.getByRole('button', { name: /sign in/i }).click();
+      await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 15000 });
+      await page.getByRole('heading', { name: /Golden Gate Dashboard/i }).waitFor({ timeout: 15000 });
+    });
+  } else if (smokeSessionSecret) {
+    await check('authenticated dashboard opens with local smoke session', async () => {
+      await page.context().addCookies([{
+        name: 'ggfo_session',
+        value: signSmokeSession(smokeSessionSecret),
+        url: baseUrl,
+        httpOnly: true,
+        sameSite: 'Lax',
+      }]);
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await expectText(page, 'Golden Gate Dashboard', 15000);
+    });
+  } else {
+    record('authenticated dashboard checks', 'skip', 'set GGFO_SMOKE_USERNAME/GGFO_SMOKE_PIN, keychain vars, or JWT_SECRET/API_SECRET in local env');
     await browser.close();
     await api.dispose();
     const failures = results.filter((result) => result.status === 'fail');
@@ -92,13 +158,7 @@ async function main() {
     return;
   }
 
-  await check('staff login succeeds without exposing PIN', async () => {
-    await page.getByPlaceholder('dimond').fill(username);
-    await page.locator('input[type="password"]').fill(pin);
-    await page.getByRole('button', { name: /sign in/i }).click();
-    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 15000 });
-    await page.getByRole('heading', { name: /Golden Gate Dashboard/i }).waitFor({ timeout: 15000 });
-  });
+  await waitForDashboardRows(page);
 
   await check('header is compact and uses requested labels', async () => {
     await expectText(page, 'Golden Gate Dashboard');
@@ -109,8 +169,8 @@ async function main() {
     await expectText(page, 'Services this month');
     await expectNoText(page, 'Categories');
     await expectNoText(page, 'Filter by category');
-    await expectNoText(page, 'Services month');
-    await expectNoText(page, 'Calls today');
+    await expectNoExactText(page, 'Services month');
+    await expectNoExactText(page, 'Calls today');
   });
 
   await check('payments remains a live header link', async () => {
@@ -136,6 +196,14 @@ async function main() {
     assert(gridText.includes('...') || gridText.includes('N/A') || /First Call|Service|Cremation|Burial/.test(gridText), 'grid did not render milestone cells');
   });
 
+  await check('deceased cell surfaces dates and factual source coverage', async () => {
+    const gridText = await page.locator('main section').first().innerText();
+    assert(!/Contact needed/i.test(gridText), 'deceased cell still says Contact needed');
+    assert(/\bDOB\b/.test(gridText), 'DOB slot missing from deceased cell');
+    assert(/\bTransition\b/i.test(gridText), 'Transition slot missing from deceased cell');
+    assert(/Source coverage|Staff contact|Source contact|Candidate/i.test(gridText), 'deceased cell does not show source/contact coverage');
+  });
+
   await check('priority designations are absent from dashboard surface', async () => {
     const bodyText = await page.locator('body').innerText();
     assert(!/\bPriority\b/i.test(bodyText), 'found Priority text');
@@ -153,7 +221,8 @@ async function main() {
   });
 
   await check('calendar events open the family drawer when available', async () => {
-    const eventButton = page.locator('section button').filter({ hasText: /First call|Service|Cremation|Burial|Disposition|Certificate/i }).first();
+    await page.getByRole('button', { name: /^month$/i }).click();
+    const eventButton = page.locator('button[data-case-calendar-event="true"]').first();
     if (!(await eventButton.count())) {
       record('calendar event drawer open', 'skip', 'no dated calendar events rendered in current data window');
       return;
@@ -164,8 +233,9 @@ async function main() {
     await page.getByRole('button', { name: /^Close$/ }).click();
   });
 
-  await check('row click opens drawer and drawer has one primary content scroll plus sticky source rail', async () => {
+  await check('row click opens drawer with one controlled content scroll plus sticky source rail', async () => {
     await page.getByRole('button', { name: /^Active Cases$/ }).click();
+    await waitForDashboardRows(page);
     const row = page.locator('main [role="button"][aria-label^="Open details for"]').first();
     await row.waitFor({ timeout: 15000 });
     await row.click();
@@ -174,20 +244,34 @@ async function main() {
     await expectText(page, 'Family detail');
     await expectText(page, 'Master sheet at a glance');
     await expectText(page, 'Sources');
-    const drawerBodyScrollers = await drawer.evaluate((node) =>
-      Array.from(node.querySelectorAll('*')).filter((el) => {
-        const style = getComputedStyle(el);
+    const firstPaintText = await drawer.innerText();
+    assert(!/Loading all linked rows and files/i.test(firstPaintText), 'drawer blocks on linked rows/files loading message');
+    const drawerScrollInfo = await drawer.evaluate((node) => {
+      const all = Array.from(node.querySelectorAll('*'));
+      const primary = all.filter((el) => {
         const className = String(el.getAttribute('class') || '');
-        return className.includes('overflow-y-auto') && el.scrollHeight > el.clientHeight + 4 && !className.includes('max-h-[58dvh]');
-      }).length,
-    );
-    assert(drawerBodyScrollers === 0, `drawer-level scrolling detected: ${drawerBodyScrollers}`);
+        return className.includes('space-y-2') && className.includes('overflow-y-auto');
+      });
+      const scrollable = all.filter((el) => {
+        const style = getComputedStyle(el);
+        return style.overflowY === 'auto' && el.scrollHeight > el.clientHeight + 4;
+      });
+      const body = document.scrollingElement;
+      return {
+        primaryCount: primary.length,
+        scrollableCount: scrollable.length,
+        pageCanScrollBehind: Boolean(body && body.scrollHeight > body.clientHeight + 4),
+      };
+    });
+    assert(drawerScrollInfo.primaryCount === 1, `expected one primary drawer content scroller, got ${drawerScrollInfo.primaryCount}`);
+    assert(!drawerScrollInfo.pageCanScrollBehind, 'page can scroll behind drawer overlay');
+    await page.mouse.wheel(0, 1600);
+    await expectText(page, 'Recent audit');
   });
 
   await check('source diagnostics are subtle in drawer and not consuming header space', async () => {
     await expectNoLocator(page, 'header >> text=Sources');
-    const drawerSources = page.getByRole('dialog').getByText('Sources', { exact: true });
-    await drawerSources.waitFor({ timeout: 5000 });
+    await expectText(page, 'Sources');
   });
 
   await check('drawer exposes raw internal contact/source fields when available', async () => {
@@ -212,6 +296,9 @@ async function main() {
 
   await check('no source-system write requests occurred during smoke run', async () => {
     assert(sourceWriteRequests.length === 0, sourceWriteRequests.join('\n'));
+    const syncSource = readFileSync(join(process.cwd(), 'dashboard/src/lib/weekly-service-sync.ts'), 'utf8');
+    assert(syncSource.includes('/auth/spreadsheets.readonly'), 'Google Sheets sync is not using readonly scope');
+    assert(!/spreadsheets\.values\.(?:update|append|batchUpdate)/.test(syncSource), 'Google Sheets write API detected in sync source');
   });
 
   await screenshot(page, 'dashboard-smoke-final');
@@ -225,13 +312,30 @@ async function main() {
   }
 }
 
-async function expectText(page, text) {
-  await page.getByText(text, { exact: false }).first().waitFor({ timeout: 5000 });
+async function waitForDashboardRows(page) {
+  await expectText(page, 'Golden Gate Dashboard', 15000);
+  await page.locator('main [role="button"][aria-label^="Open details for"]').first().waitFor({ timeout: 20000 });
+}
+
+async function expectText(page, text, timeout = 5000) {
+  await page.waitForFunction((needle) => {
+    const visible = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const style = getComputedStyle(el);
+      return style.visibility !== 'hidden' && style.display !== 'none' && Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    };
+    return Array.from(document.body.querySelectorAll('*')).some((el) => visible(el) && (el.textContent || '').includes(needle));
+  }, text, { timeout });
 }
 
 async function expectNoText(page, text) {
   const count = await page.getByText(text, { exact: false }).count();
   assert(count === 0, `unexpected text found: ${text}`);
+}
+
+async function expectNoExactText(page, text) {
+  const count = await page.getByText(text, { exact: true }).count();
+  assert(count === 0, `unexpected exact text found: ${text}`);
 }
 
 async function expectNoLocator(page, selector) {

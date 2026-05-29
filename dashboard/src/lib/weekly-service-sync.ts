@@ -382,8 +382,7 @@ function parseSheetDate(value: string | undefined): Date | null {
   if (!text) return null;
   const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
   if (iso) {
-    const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
-    return Number.isNaN(d.getTime()) ? null : d;
+    return exactLocalDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
   }
   // Sheets use M/D/Y, M.D.Y, and M-D-Y (e.g. "8/1/2024", "5.21.2026", "1-23-26").
   const md = text.match(/\b(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b/);
@@ -392,10 +391,22 @@ function parseSheetDate(value: string | undefined): Date | null {
     const month = Number(md[1]);
     const day = Number(md[2]);
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-    const d = new Date(year, month - 1, day, 12);
-    return Number.isNaN(d.getTime()) ? null : d;
+    return exactLocalDate(year, month, day);
   }
   return null;
+}
+
+function exactLocalDate(year: number, month: number, day: number) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(year, month - 1, day, 12);
+  if (
+    Number.isNaN(d.getTime()) ||
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day
+  ) return null;
+  return d;
 }
 
 function hasValue(record: Record<string, string>, ...keys: string[]) {
@@ -561,7 +572,7 @@ function arrangementCalendarEntries(rows: string[][], config: SheetConfig) {
         // position instead would collide across stacked week-blocks that reuse times.
         const key = `${slug(column.label)}-${slug(timeCell)}-${slug(label)}`;
         const record: Record<string, string> = {
-          _row_number: String(headerIdx + rowIdx + 1),
+          _row_number: String(rowIdx + 1),
           day: column.label,
           time: timeCell,
           appointment_label: label,

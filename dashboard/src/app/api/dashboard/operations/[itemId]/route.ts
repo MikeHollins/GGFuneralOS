@@ -12,8 +12,14 @@ function cleanValue(field: string, value: unknown) {
   if (field === 'date_of_death') {
     if (!text) return ''; // clearing is allowed
     if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error('Date of death must be in YYYY-MM-DD format');
-    const parsed = new Date(`${text}T12:00:00`);
-    if (Number.isNaN(parsed.getTime())) throw new Error('Invalid date of death');
+    const [year, month, day] = text.split('-').map(Number);
+    const parsed = new Date(year, month - 1, day, 12);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getFullYear() !== year ||
+      parsed.getMonth() !== month - 1 ||
+      parsed.getDate() !== day
+    ) throw new Error('Invalid date of death');
     if (parsed.getTime() > Date.now()) throw new Error('Date of death cannot be in the future');
   }
   return text;

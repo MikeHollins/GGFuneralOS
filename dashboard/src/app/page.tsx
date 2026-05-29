@@ -394,6 +394,14 @@ function cleanDisplay(value: unknown) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function isSupplementalEstimateText(value: string) {
+  const text = cleanDisplay(value).toLowerCase();
+  if (!text) return false;
+  // Do not surface generic timeline guesses as dashboard facts. The board should
+  // redistribute source facts, not add or amplify estimated wait-time guidance.
+  return /\b\d+\s*[-–]\s*\d+\s+(?:business\s+)?(?:day|days|week|weeks|month|months)\b/.test(text);
+}
+
 function isTimeOnlyLabel(value: string) {
   return /^\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?$/i.test(cleanDisplay(value));
 }
@@ -469,15 +477,22 @@ function parseOperationalDate(value: unknown) {
 
   const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
   if (iso) {
-    const parsed = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return exactLocalDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
   }
 
   const slash = text.match(/\b(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})\b/);
   if (slash) {
     const year = Number(slash[3].length === 2 ? `20${slash[3]}` : slash[3]);
-    const parsed = new Date(year, Number(slash[1]) - 1, Number(slash[2]), 12);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return exactLocalDate(year, Number(slash[1]), Number(slash[2]));
+  }
+
+  const named = text.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:,?\s+(\d{2,4}))?\b/i);
+  if (named) {
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const month = months.findIndex((m) => named[1].toLowerCase().startsWith(m)) + 1;
+    const fallbackYear = new Date().getFullYear();
+    const year = named[3] ? Number(named[3].length === 2 ? `20${named[3]}` : named[3]) : fallbackYear;
+    return exactLocalDate(year, month, Number(named[2]));
   }
 
   // No unguarded `new Date(text)` fallback: JS Date.parse is locale/heuristic-driven
@@ -486,6 +501,19 @@ function parseOperationalDate(value: unknown) {
   // active window. Anything not matched by the explicit formats above is treated as
   // "no date" (null) rather than guessed.
   return null;
+}
+
+function exactLocalDate(year: number, month: number, day: number) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(year, month - 1, day, 12);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) return null;
+  return parsed;
 }
 
 function itemBusinessDates(item: DashboardItem) {
@@ -634,7 +662,8 @@ function collectTextEntries(item: DashboardItem) {
   ]);
   return Object.entries(sourcePayload(item))
     .filter(([key, value]) => !key.startsWith('_') && !redundantKeys.has(key) && cleanDisplay(value))
-    .map(([key, value]) => [key, safeFieldValue(key, cleanDisplay(value))] as const);
+    .map(([key, value]) => [key, safeFieldValue(key, cleanDisplay(value))] as const)
+    .filter(([, value]) => !isSupplementalEstimateText(value));
 }
 
 function isContactLike(value: string | null | undefined) {
@@ -786,7 +815,7 @@ function sourceDateOfBirth(items: DashboardItem[]) {
   const preferred = [...items].sort((a, b) => Number(b.area === 'death-cert') - Number(a.area === 'death-cert'));
   for (const item of preferred) {
     const value = firstPayloadValue(item, DATE_OF_BIRTH_KEYS);
-    if (value) return canonicalKnownDate(value) ?? value;
+    if (value) return canonicalKnownDate(value, 'birth') ?? value;
   }
   return null;
 }
@@ -795,9 +824,9 @@ function sourceDateOfTransition(items: DashboardItem[]) {
   const preferred = [...items].sort((a, b) => Number(b.area === 'death-cert') - Number(a.area === 'death-cert'));
   for (const item of preferred) {
     const normalized = cleanDisplay(item.dateOfDeath);
-    if (normalized) return canonicalKnownDate(normalized) ?? normalized;
+    if (normalized) return canonicalKnownDate(normalized, 'transition') ?? normalized;
     const value = firstPayloadValue(item, DATE_OF_TRANSITION_KEYS);
-    if (value) return canonicalKnownDate(value) ?? value;
+    if (value) return canonicalKnownDate(value, 'transition') ?? value;
   }
   return null;
 }
@@ -834,28 +863,33 @@ function mediaMatchForItem(item: DashboardItem, knownCase: { key: string; name: 
   };
 }
 
-function parseKnownDateText(raw: string) {
+function parseKnownDateText(raw: string, kind: 'birth' | 'transition' | 'generic' = 'generic') {
   const text = cleanDisplay(raw);
   if (!text) return null;
   const iso = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
   if (iso) {
-    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const date = exactLocalDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+    if (!date) return null;
+    if (kind === 'birth' && date.getTime() > Date.now()) return null;
+    return date;
   }
   const md = text.match(/\b(\d{1,2})[/. -](\d{1,2})[/. -](\d{2,4})\b/);
   if (md) {
-    const year = Number(md[3].length === 2 ? `20${md[3]}` : md[3]);
+    const twoDigit = md[3].length === 2;
+    let year = Number(twoDigit ? `20${md[3]}` : md[3]);
+    if (twoDigit && kind === 'birth' && year > new Date().getFullYear()) year -= 100;
     const month = Number(md[1]);
     const day = Number(md[2]);
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-    const date = new Date(year, month - 1, day, 12);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const date = exactLocalDate(year, month, day);
+    if (!date) return null;
+    if (kind === 'birth' && date.getTime() > Date.now()) return null;
+    return date;
   }
   return null;
 }
 
-function canonicalKnownDate(raw: string) {
-  const date = parseKnownDateText(raw);
+function canonicalKnownDate(raw: string, kind: 'birth' | 'transition' | 'generic' = 'generic') {
+  const date = parseKnownDateText(raw, kind);
   if (!date) return null;
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -1016,7 +1050,10 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
       <input
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={def.kind === 'date' ? 'e.g. Jun 3, 11a' : 'Location'}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setEditing(false);
+        }}
+        placeholder={def.kind === 'date' ? 'MM/DD/YYYY or Jun 3, 2026' : 'Location'}
         className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
         autoFocus
       />
@@ -1033,7 +1070,7 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
 
 function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
   return (
-    <DrawerDisclosure title="Scheduling & locations" meta="First call, service, cremation, burial, and location slots" bodyClassName="max-h-[58dvh] overflow-y-auto p-3">
+    <DrawerDisclosure title="Scheduling & locations" meta="First call, service, cremation, burial, and location slots" bodyClassName="p-3">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {ALL_MILESTONES.map((def) => (
           <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
@@ -1125,7 +1162,7 @@ function FamilyContactEditor({
     : 'Name, phone, and relationship can be added here.';
 
   return (
-    <DrawerDisclosure title="Family contact / next of kin" meta={contactSummary} bodyClassName="max-h-[58dvh] overflow-y-auto p-3">
+    <DrawerDisclosure title="Family contact / next of kin" meta={contactSummary} bodyClassName="p-3">
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-[11px] font-medium text-neutral-500">
@@ -1151,6 +1188,9 @@ function FamilyContactEditor({
                 <input
                   value={String(draft[field as keyof ContactOverride] ?? '')}
                   onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setEditing(false);
+                  }}
                   placeholder={placeholder}
                   className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
                 />
@@ -1161,6 +1201,9 @@ function FamilyContactEditor({
               <textarea
                 value={draft.notes}
                 onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setEditing(false);
+                }}
                 placeholder="Optional staff note"
                 className="mt-1 min-h-12 w-full resize-y rounded-md border border-neutral-300 px-2 py-1.5 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
               />
@@ -1255,7 +1298,7 @@ function MediaProgramMatches({ record }: { record: CaseRecord }) {
     <DrawerDisclosure
       title="Media & program matches"
       meta={`${record.mediaMatches.length} matched files from read-only server index`}
-      bodyClassName="max-h-[58dvh] overflow-y-auto p-3"
+      bodyClassName="p-3"
     >
         {record.mediaMatches.length ? (
           <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
@@ -1301,12 +1344,14 @@ function SourceAtGlance({
   sheetSyncing,
   sheetSyncMessage,
   onSync,
+  scrollBody = false,
 }: {
   record: CaseRecord;
   sources: SourceHealth[];
   sheetSyncing: boolean;
   sheetSyncMessage: string;
   onSync: () => void;
+  scrollBody?: boolean;
 }) {
   const groups = [
     { title: 'Dates & times', entries: record.dateEntries },
@@ -1335,14 +1380,18 @@ function SourceAtGlance({
     };
   });
   const visibleSourceFacts = sourceFacts.filter((fact) => fact.value).slice(0, 14);
+  const sourceIssue = sources.some((source) => source.status === 'unavailable');
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-neutral-200 bg-white px-3 py-2">
-        <h3 className="text-sm font-black text-neutral-950">Master sheet at a glance</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-black text-neutral-950">Master sheet at a glance</h3>
+          {sourceIssue ? <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">Source check</span> : null}
+        </div>
         <div className="text-[11px] text-neutral-500">Read-only source values surfaced for staff.</div>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-hidden p-3">
+      <div className={`min-h-0 flex-1 space-y-2 p-3 ${scrollBody ? 'overflow-y-auto' : 'overflow-visible'}`}>
         {groups.map((group) => (
           <div key={group.title} className="rounded-md border border-neutral-200 bg-white p-2">
             <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">{group.title}</div>
@@ -1403,7 +1452,7 @@ function SourceAtGlance({
             Source rows
             <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px]">{record.items.length}</span>
           </summary>
-          <div className="max-h-80 overflow-hidden border-t border-neutral-100 p-2">
+          <div className="border-t border-neutral-100 p-2">
             <div className="space-y-1">
               {sourceFacts.length ? sourceFacts.map((fact) => (
                 <div key={fact.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] leading-tight">
@@ -1777,7 +1826,7 @@ function effectiveWorkflowStates(
     return base.map((state) => ({
       ...state,
       auto: state.auto || !state.overridden,
-      done: true,
+      done: state.overridden ? state.done : true,
       gap: false,
     }));
   }
@@ -1814,48 +1863,12 @@ function promptInitials() {
 function WorkflowStepButton({
   record,
   state,
-  onToggleStep,
   onOpenDetails,
 }: {
   record: CaseRecord;
   state: EffectiveStepState;
-  onToggleStep: ToggleStep;
   onOpenDetails: () => void;
 }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const [initials, setInitials] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-
-  function openMenu() {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) setPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 240)) });
-    setInitials(rememberedInitials());
-    setError('');
-    setOpen(true);
-  }
-
-  async function apply(next: 'done' | 'pending' | 'auto') {
-    const clean = initials.trim().toUpperCase();
-    if (next !== 'auto' && !clean) {
-      setError('Initials required');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      if (clean && typeof window !== 'undefined') window.localStorage.setItem('ggfc_staff_initials', clean);
-      await onToggleStep(record, state.step, next, clean);
-      setOpen(false);
-    } catch (err: any) {
-      setError(err?.message || 'Could not save');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const tone = state.gap
     ? 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100'
     : state.done
@@ -1865,75 +1878,32 @@ function WorkflowStepButton({
         : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100';
 
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpenDetails();
-        }}
-        title={`${state.step.label} — ${state.step.hint}. ${
-          state.done ? 'Done' : state.gap ? 'Needs attention — a later step is already done' : 'Not done'
-        }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to open case details.`}
-        aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to open case details.`}
-        className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold leading-tight transition ${tone}`}
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpenDetails();
+      }}
+      title={`${state.step.label} — ${state.step.hint}. ${
+        state.done ? 'Done' : state.gap ? 'Needs attention — a later step is already done' : 'Not done'
+      }${state.overridden ? ' (set by staff)' : ' (auto-detected)'}. ${state.summary}. Click to open case details.`}
+      aria-label={`${state.step.label}: ${state.step.hint}. ${state.done ? 'done' : state.gap ? 'gap' : 'not done'} for ${record.name}. Click to open case details.`}
+      className={`flex w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold leading-tight transition ${tone}`}
+    >
+      <span
+        className={`flex h-3 w-3 shrink-0 items-center justify-center rounded border text-[8px] ${
+          state.done
+            ? 'border-emerald-600 bg-emerald-600 text-white'
+            : state.gap
+              ? 'border-red-500 bg-red-500 text-white'
+              : 'border-neutral-400 bg-white text-neutral-300'
+        }`}
       >
-        <span
-          className={`flex h-3 w-3 shrink-0 items-center justify-center rounded border text-[8px] ${
-            state.done
-              ? 'border-emerald-600 bg-emerald-600 text-white'
-              : state.gap
-                ? 'border-red-500 bg-red-500 text-white'
-                : 'border-neutral-400 bg-white text-neutral-300'
-          }`}
-        >
-          {state.gap && !state.done ? '!' : '✓'}
-        </span>
-        <span className="min-w-0 flex-1 truncate">{state.step.gridLabel}</span>
-        {state.overridden ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
-      </button>
-      {open ? (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div
-            role="dialog"
-            aria-label={`${state.step.label} status`}
-            className="fixed z-50 w-56 rounded-lg border border-neutral-200 bg-white p-2 text-xs shadow-xl"
-            style={{ top: pos.top, left: pos.left }}
-          >
-            <div className="px-1 pb-0.5 font-bold text-neutral-900">{state.step.label}</div>
-            <div className="px-1 pb-2 text-[11px] text-neutral-500">
-              {state.summary}
-              {!state.overridden ? ` · auto: ${state.auto ? 'done' : 'pending'}` : ' · set by staff'}
-            </div>
-            <input
-              value={initials}
-              onChange={(event) => setInitials(event.target.value)}
-              placeholder="Your initials"
-              maxLength={5}
-              className="mb-2 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm uppercase outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
-            />
-            <div className="grid grid-cols-3 gap-1">
-              <button type="button" disabled={busy} onClick={() => apply('done')} className="h-8 rounded-md bg-emerald-600 px-1 font-semibold text-white disabled:opacity-60">Done</button>
-              <button type="button" disabled={busy} onClick={() => apply('pending')} className="h-8 rounded-md bg-amber-500 px-1 font-semibold text-white disabled:opacity-60">Not done</button>
-              <button type="button" disabled={busy} onClick={() => apply('auto')} className="h-8 rounded-md bg-neutral-200 px-1 font-semibold text-neutral-700 disabled:opacity-60">Auto</button>
-            </div>
-            {error ? <div className="mt-1 px-1 text-red-700">{error}</div> : null}
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onOpenDetails();
-              }}
-              className="mt-2 w-full rounded-md px-1 py-1 text-left text-[11px] font-semibold text-neutral-500 hover:bg-neutral-100"
-            >
-              Open case details →
-            </button>
-          </div>
-        </>
-      ) : null}
-    </>
+        {state.gap && !state.done ? '!' : '✓'}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{state.step.gridLabel}</span>
+      {state.overridden ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" aria-hidden="true" /> : null}
+    </button>
   );
 }
 
@@ -1963,7 +1933,6 @@ function WorkflowProgressCell({
             key={state.step.id}
             record={record}
             state={state}
-            onToggleStep={onToggleStep}
             onOpenDetails={onOpenDetails}
           />
         ))}
@@ -2081,6 +2050,7 @@ function CalendarEventPill({ event, onOpen }: { event: CaseCalendarEvent; onOpen
   return (
     <button
       type="button"
+      data-case-calendar-event="true"
       onClick={() => onOpen(event.caseKey)}
       className="block w-full rounded-md border border-neutral-200 bg-white px-2 py-1 text-left text-[11px] leading-tight shadow-sm transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
       title={`${event.label}: ${event.caseName}${event.location ? `, ${event.location}` : ''}`}
@@ -2366,14 +2336,19 @@ function StatusChip({
       </button>
 
       {open ? (
-        <div
-          id={`${controlId}-menu`}
-          role="dialog"
-          aria-label={`Status editor for ${item.label}`}
-          onClick={(event) => event.stopPropagation()}
-          className="fixed z-50 w-72 rounded-lg border border-neutral-200 bg-white p-3 text-left shadow-xl"
-          style={{ top: menuPosition.top, left: menuPosition.left }}
-        >
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div
+            id={`${controlId}-menu`}
+            role="dialog"
+            aria-label={`Status editor for ${item.label}`}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setOpen(false);
+            }}
+            className="fixed z-50 w-72 rounded-lg border border-neutral-200 bg-white p-3 text-left shadow-xl"
+            style={{ top: menuPosition.top, left: menuPosition.left }}
+          >
           <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Status</div>
           <div role="listbox" aria-label="Available statuses" className="mt-2 grid grid-cols-1 gap-1">
             {item.options.map((option) => (
@@ -2426,7 +2401,8 @@ function StatusChip({
               </button>
             </div>
           </div>
-        </div>
+          </div>
+        </>
       ) : null}
     </div>
   );
@@ -2637,7 +2613,7 @@ function WorkflowChecklist({
   const doneCount = effectiveStates.filter((state) => state.done).length;
 
   return (
-    <DrawerDisclosure title="Family checklist" meta={`${doneCount}/${effectiveStates.length} complete`} defaultOpen bodyClassName="max-h-[58dvh] overflow-y-auto">
+    <DrawerDisclosure title="Family checklist" meta={`${doneCount}/${effectiveStates.length} complete`} defaultOpen>
       {/* Compact multi-column boxes — all 8 steps visible at a glance. Click one to edit below. */}
       <div className="grid grid-cols-2 gap-1.5 p-3 sm:grid-cols-3 xl:grid-cols-4">
         {effectiveStates.map((st) => {
@@ -2721,7 +2697,6 @@ function DetailDrawer({
   sheetSyncing,
   sheetSyncMessage,
   auditEntries,
-  detailLoading,
   onClose,
   onCommit,
   onUpdate,
@@ -2739,7 +2714,6 @@ function DetailDrawer({
   sheetSyncing: boolean;
   sheetSyncMessage: string;
   auditEntries: AuditEntry[];
-  detailLoading: boolean;
   onClose: () => void;
   onCommit: (item: DashboardItem, nextStatus: string, initials: string) => Promise<void>;
   onUpdate: (itemId: string, field: EditableItemField, value: string) => Promise<void>;
@@ -2823,15 +2797,10 @@ function DetailDrawer({
           </div>
         </div>
 
-        {/* No drawer-level scroll: fixed-height body. Sections are collapsed by default
-            and each expanded section owns its bounded detail area. */}
-        <div className="grid h-[calc(100dvh-73px)] grid-cols-[minmax(0,1fr)_340px] overflow-hidden max-xl:block">
-          {detailLoading ? (
-            <div className="col-span-2 mx-3 mt-3 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
-              Loading all linked rows and files for this family.
-            </div>
-          ) : null}
-          <div className="min-h-0 space-y-2 overflow-hidden px-3 pb-3 pt-3">
+        {/* The overlay/body never scrolls behind the drawer. The content pane owns one
+            controlled scroll path so expanded sections remain reachable on short screens. */}
+        <div className="grid h-[calc(100dvh-73px)] grid-cols-[minmax(0,1fr)_340px] overflow-hidden max-xl:flex max-xl:flex-col">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-3 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
@@ -2846,7 +2815,7 @@ function DetailDrawer({
             <div className="space-y-3">
               <MediaProgramMatches record={record} />
 
-              <DrawerDisclosure title="Recent audit" meta="Staff edits for this family" bodyClassName="max-h-[58dvh] overflow-y-auto divide-y divide-neutral-100">
+              <DrawerDisclosure title="Recent audit" meta="Staff edits for this family" bodyClassName="divide-y divide-neutral-100">
                   {(() => {
                     const caseAudit = auditEntries
                       .filter((entry) => record.items.some((item) => item.id === entry.itemId) || entry.itemId.startsWith(`${record.key}:`))
@@ -2868,6 +2837,16 @@ function DetailDrawer({
                     );
                   })()}
               </DrawerDisclosure>
+            </div>
+            <div className="xl:hidden">
+              <SourceAtGlance
+                record={record}
+                sources={sources}
+                sheetSyncing={sheetSyncing}
+                sheetSyncMessage={sheetSyncMessage}
+                onSync={onSyncSources}
+                scrollBody={false}
+              />
             </div>
           </div>
           <aside className="min-h-0 border-l border-neutral-200 bg-neutral-50 max-xl:hidden">
@@ -2898,13 +2877,13 @@ export default function BoardPage() {
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [syncState, setSyncState] = useState<'loading' | 'connected' | 'unavailable'>('loading');
   const [operationsLoading, setOperationsLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [operationsError, setOperationsError] = useState('');
   const [sheetSyncMessage, setSheetSyncMessage] = useState('');
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const operationsRequestRef = useRef(0);
   const detailFetchedKeysRef = useRef<Set<string>>(new Set());
+  const detailRequestRef = useRef(0);
 
   useEffect(() => {
     const syncView = () => {
@@ -2931,9 +2910,11 @@ export default function BoardPage() {
   useEffect(() => {
     if (!selectedKey) return;
     if (detailFetchedKeysRef.current.has(selectedKey)) return;
+    const key = selectedKey;
     const timer = window.setTimeout(() => {
-      detailFetchedKeysRef.current.add(selectedKey);
-      loadOperationsFeed({ caseKey: selectedKey, merge: true, limit: 2000 });
+      loadOperationsFeed({ caseKey: key, merge: true, limit: 2000 }).then((loaded) => {
+        if (loaded) detailFetchedKeysRef.current.add(key);
+      });
     }, 50);
     return () => window.clearTimeout(timer);
   }, [selectedKey]);
@@ -2951,9 +2932,9 @@ export default function BoardPage() {
     const requestId = options.merge ? operationsRequestRef.current : operationsRequestRef.current + 1;
     if (!options.merge) operationsRequestRef.current = requestId;
     const isDetailFetch = Boolean(options.merge && options.caseKey);
+    if (isDetailFetch) detailRequestRef.current += 1;
 
-    if (isDetailFetch) setDetailLoading(true);
-    else setOperationsLoading(true);
+    if (!isDetailFetch) setOperationsLoading(true);
     setOperationsError('');
 
     return getOperationsFeed({
@@ -2986,6 +2967,7 @@ export default function BoardPage() {
           .sort((a, b) => Date.parse(b.changedAt) - Date.parse(a.changedAt))
           .slice(0, 100));
         setSyncState('connected');
+        return true;
       })
       .catch((error: any) => {
         if (!options.merge && requestId !== operationsRequestRef.current) return;
@@ -2996,10 +2978,10 @@ export default function BoardPage() {
         }
         setSyncState('unavailable');
         setOperationsError(error?.message || (isDetailFetch ? 'Family detail could not load.' : 'Dashboard records could not load.'));
+        return false;
       })
       .finally(() => {
-        if (isDetailFetch) setDetailLoading(false);
-        else if (requestId === operationsRequestRef.current) setOperationsLoading(false);
+        if (!isDetailFetch && requestId === operationsRequestRef.current) setOperationsLoading(false);
       });
   }
 
@@ -3362,7 +3344,6 @@ export default function BoardPage() {
   }, [activeView, caseRecords, search, statusOverrides, milestoneOverrides, contactOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, visibleRecordLimit), [matchingRecords]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
-  const hasSourceIssue = sources.some((source) => source.status === 'unavailable');
   const visibleSummary = operationsLoading
     ? 'Loading dashboard records'
     : feedMeta
@@ -3508,7 +3489,6 @@ export default function BoardPage() {
         sheetSyncing={sheetSyncing}
         sheetSyncMessage={sheetSyncMessage}
         auditEntries={auditEntries}
-        detailLoading={detailLoading}
         onClose={() => setSelectedKey(null)}
         onCommit={commitStatus}
         onUpdate={updateItemField}

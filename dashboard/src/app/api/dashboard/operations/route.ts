@@ -107,6 +107,15 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
             OR lower(c.notes) LIKE $${index}
           )
       )
+      OR EXISTS (
+        SELECT 1 FROM case_milestones m
+        WHERE m.case_key = lower(coalesce(source_payload->>'case_match_key', ''))
+          AND (
+            lower(m.milestone_key) LIKE $${index}
+            OR lower(m.value) LIKE $${index}
+            OR CASE WHEN m.is_na THEN 'n/a' ELSE '' END LIKE $${index}
+          )
+      )
     )`);
   }
 
