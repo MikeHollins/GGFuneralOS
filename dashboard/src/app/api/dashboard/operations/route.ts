@@ -151,7 +151,7 @@ async function getItems({
     params.push(Math.max(limit, PER_AREA_LIMIT * 8));
     const limitIndex = params.length;
     listSql = `SELECT ${ITEM_COLUMNS} FROM (
-         SELECT ${ITEM_COLUMNS},
+         SELECT ${ITEM_COLUMNS}, business_date,
                 row_number() OVER (PARTITION BY area ORDER BY business_date DESC NULLS LAST, created_at DESC) AS rn
          FROM operational_items
          WHERE ${whereSql}
