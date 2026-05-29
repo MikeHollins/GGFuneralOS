@@ -162,12 +162,10 @@ const primaryViews: ViewId[] = ['active', 'today', 'cases'];
 // Category views are loose filters over the same table — collapsed into a compact menu.
 const categoryViews: ViewId[] = ['service', 'arrangements', 'death-certs', 'cremains', 'belongings', 'files'];
 
-// `ready` = backed by a live Next dashboard API. Pages whose APIs aren't ported into the
-// dashboard app yet are shown disabled ("soon") so nothing looks live but broken.
 const appTopLinks = [
   { href: '/staff', label: 'Staff/Admin', ready: true },
   { href: '/texts', label: 'Texts', ready: false },
-  { href: '/payments', label: 'Payments', ready: false },
+  { href: '/payments', label: 'Payments', ready: true },
 ];
 
 const visibleRecordLimit = 200;
@@ -3020,13 +3018,10 @@ export default function BoardPage() {
     : feedMeta
       ? `${visibleRecords.length} families shown from ${feedMeta.returned.toLocaleString()} loaded records${feedMeta.limited ? ` of ${feedMeta.total.toLocaleString()} matches` : ''}`
       : `${visibleRecords.length} families shown`;
-  const needsContactCount = useMemo(
-    () => caseRecords.filter((record) => !effectiveFamilyContact(record, contactOverrides)).length,
-    [caseRecords, contactOverrides],
-  );
-  const mediaGapsCount = useMemo(
-    () => caseRecords.filter((record) => workflowStateByKey.get(record.key)?.some((state) => state.step.id === 'media-program' && !state.done)).length,
-    [caseRecords, workflowStateByKey],
+  const firstCallsToday = useMemo(() => firstCallsTodayCount(caseRecords), [caseRecords]);
+  const servicesCompletedThisMonth = useMemo(
+    () => completedServicesThisMonthCount(caseRecords, statusOverrides),
+    [caseRecords, statusOverrides],
   );
 
   return (
@@ -3080,8 +3075,8 @@ export default function BoardPage() {
           <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
-              <HeaderMetric label="Needs contact" value={needsContactCount} />
-              <HeaderMetric label="Media gaps" value={mediaGapsCount} />
+              <HeaderMetric label="Calls today" value={firstCallsToday} />
+              <HeaderMetric label="Services month" value={servicesCompletedThisMonth} />
             </div>
             <input
               value={search}
