@@ -1134,9 +1134,20 @@ function applyCaseIdentity(rows: ImportRow[]): void {
       status = 'bridged';
       basis = 'name-matched case number';
     } else if (nameYears && nameYears.size > 1) {
-      year = null;
-      status = 'unverified';
-      basis = `name spans ${nameYears.size} case-number years`;
+      // Name spans multiple death-years (likely different people sharing a name). If this row's
+      // own business_date lands on exactly one of those known years, place it there as a distinct,
+      // lower-confidence `date-bridged` tier so it groups usefully but stays visibly less certain.
+      // This date is an activity date, NOT a death date — it must never feed DOD/compliance.
+      const bridgeYear = row.business_date ? row.business_date.slice(0, 4) : null;
+      if (bridgeYear && nameYears.has(bridgeYear)) {
+        year = bridgeYear;
+        status = 'date-bridged';
+        basis = "business-date year matches one of the name's case-number years";
+      } else {
+        year = null;
+        status = 'unverified';
+        basis = `name spans ${nameYears.size} case-number years`;
+      }
     } else if (row.business_date) {
       year = row.business_date.slice(0, 4);
       status = 'date-year';
