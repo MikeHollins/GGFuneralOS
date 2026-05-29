@@ -132,6 +132,7 @@ async function main() {
   await check('grid uses quiet empty state instead of repeated Pending labels', async () => {
     const gridText = await page.locator('main section').first().innerText();
     assert(!/\bPending\b/.test(gridText), 'grid still contains visible "Pending" text');
+    assert(!/\bDashboard due\b/i.test(gridText), 'grid still contains Dashboard due wording');
     assert(gridText.includes('...') || gridText.includes('N/A') || /First Call|Service|Cremation|Burial/.test(gridText), 'grid did not render milestone cells');
   });
 
@@ -173,13 +174,14 @@ async function main() {
     await expectText(page, 'Family detail');
     await expectText(page, 'Master sheet at a glance');
     await expectText(page, 'Sources');
-    const verticalScrollers = await drawer.evaluate((node) =>
+    const drawerBodyScrollers = await drawer.evaluate((node) =>
       Array.from(node.querySelectorAll('*')).filter((el) => {
         const style = getComputedStyle(el);
-        return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 4;
+        const className = String(el.getAttribute('class') || '');
+        return className.includes('overflow-y-auto') && el.scrollHeight > el.clientHeight + 4 && !className.includes('max-h-[58dvh]');
       }).length,
     );
-    assert(verticalScrollers <= 3, `too many drawer scroll containers: ${verticalScrollers}`);
+    assert(drawerBodyScrollers === 0, `drawer-level scrolling detected: ${drawerBodyScrollers}`);
   });
 
   await check('source diagnostics are subtle in drawer and not consuming header space', async () => {
@@ -196,6 +198,8 @@ async function main() {
 
   await check('no invented timeline estimates are visible', async () => {
     const bodyText = await page.locator('body').innerText();
+    assert(!/\bDashboard due\b/i.test(bodyText), 'found Dashboard due wording');
+    assert(!/\bDue\b/.test(bodyText), 'found visible Due wording');
     assert(!/6\s*[-–]\s*8\s+weeks/i.test(bodyText), 'found 6-8 weeks estimate');
     assert(!/2\s*[-–]\s*3\s+day/i.test(bodyText), 'found 2-3 day estimate in dashboard surface');
   });

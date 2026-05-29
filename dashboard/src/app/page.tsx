@@ -460,7 +460,7 @@ function parseOperationalDate(value: unknown) {
   const relative = text.toLowerCase();
   const today = new Date();
   today.setHours(12, 0, 0, 0);
-  if (relative === 'today' || relative.includes('due today')) return today;
+  if (relative === 'today') return today;
   if (relative === 'tomorrow') {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -592,8 +592,8 @@ function collectGroupedEntries(item: DashboardItem, groups: Array<{ label: strin
       });
     }
   }
-  if (!entries.length && item.due) {
-    entries.push({ label: 'Dashboard due', value: item.due, source: item.source });
+  if (!entries.length && item.due && groups === dateGroups) {
+    entries.push({ label: 'Date / time', value: item.due, source: item.source });
   }
   return entries;
 }
@@ -994,16 +994,13 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
 
 function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
   return (
-    <section className="rounded-lg border border-neutral-200 bg-white">
-      <div className="border-b border-neutral-200 px-3 py-2">
-        <h3 className="text-sm font-bold text-neutral-950">Scheduling &amp; locations</h3>
-      </div>
-      <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-4">
+    <DrawerDisclosure title="Scheduling & locations" meta="First call, service, cremation, burial, and location slots" bodyClassName="max-h-[58dvh] overflow-y-auto p-3">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {ALL_MILESTONES.map((def) => (
           <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
         ))}
       </div>
-    </section>
+    </DrawerDisclosure>
   );
 }
 
@@ -1084,40 +1081,26 @@ function FamilyContactEditor({
     }
   }
 
-  return (
-    <section className="rounded-lg border border-neutral-200 bg-white">
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-neutral-200 px-3 py-2">
-        <div>
-          <h3 className="text-sm font-bold text-neutral-950">Family contact / next of kin</h3>
-          <div className="text-[11px] text-neutral-500">
-            {contact?.overridden ? 'Staff-confirmed internal contact.' : contact ? `Source candidate from ${contact.source}.` : 'No source contact found yet.'}
-          </div>
-        </div>
-        {!editing ? (
-          <button type="button" onClick={() => begin()} className="h-7 rounded-md bg-black px-2 text-[11px] font-semibold text-[#efb70c]">
-            Edit contact
-          </button>
-        ) : null}
-      </div>
+  const contactSummary = contact
+    ? [contact.name || 'Contact saved', contact.phone, contact.relationship].filter(Boolean).join(' · ')
+    : 'Name, phone, and relationship can be added here.';
 
-      <div className="grid gap-3 p-3 lg:grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)]">
-        <div className="rounded-md bg-neutral-50 p-2 text-xs">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">Current</div>
-          {contact ? (
-            <div className="mt-1 space-y-1">
-              <div className="text-sm font-bold text-neutral-950">{contact.name || 'Contact saved'}</div>
-              {contact.relationship ? <div><span className="font-semibold text-neutral-500">Relationship: </span>{contact.relationship}</div> : null}
-              {contact.phone ? <div><span className="font-semibold text-neutral-500">Phone: </span>{contact.phone}</div> : null}
-              {contact.email ? <div><span className="font-semibold text-neutral-500">Email: </span>{contact.email}</div> : null}
-              {contact.notes ? <div><span className="font-semibold text-neutral-500">Notes: </span>{contact.notes}</div> : null}
-            </div>
-          ) : (
-            <div className="mt-2 italic text-neutral-400">No contact on file.</div>
-          )}
+  return (
+    <DrawerDisclosure title="Family contact / next of kin" meta={contactSummary} bodyClassName="max-h-[58dvh] overflow-y-auto p-3">
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-medium text-neutral-500">
+            {contact?.overridden ? 'Staff-confirmed internal contact.' : contact ? `Source candidate from ${contact.source}.` : 'Internal contact fields.'}
+          </div>
+          {!editing ? (
+            <button type="button" onClick={() => begin()} className="h-7 rounded-md bg-black px-2 text-[11px] font-semibold text-[#efb70c]">
+              Edit contact
+            </button>
+          ) : null}
         </div>
 
         {editing ? (
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 xl:grid-cols-4">
             {[
               ['Name', 'contactName', 'Full name'],
               ['Relationship', 'relationship', 'Daughter, spouse, next of kin'],
@@ -1134,16 +1117,16 @@ function FamilyContactEditor({
                 />
               </label>
             ))}
-            <label className="text-xs font-semibold text-neutral-500 sm:col-span-2">
+            <label className="text-xs font-semibold text-neutral-500 xl:col-span-4">
               Internal notes
               <textarea
                 value={draft.notes}
                 onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
                 placeholder="Optional staff note"
-                className="mt-1 min-h-16 w-full resize-y rounded-md border border-neutral-300 px-2 py-1.5 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+                className="mt-1 min-h-12 w-full resize-y rounded-md border border-neutral-300 px-2 py-1.5 text-sm font-normal text-neutral-950 outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
               />
             </label>
-            <div className="flex flex-wrap gap-1 sm:col-span-2">
+            <div className="flex flex-wrap gap-1 xl:col-span-4">
               <button type="button" disabled={busy} onClick={() => save()} className="h-7 rounded-md bg-black px-2 text-[11px] font-semibold text-[#efb70c] disabled:opacity-60">Save</button>
               <button type="button" disabled={busy} onClick={clear} className="h-7 rounded-md bg-neutral-200 px-2 text-[11px] font-semibold text-neutral-700 disabled:opacity-60">Use source / clear</button>
               <button type="button" onClick={() => setEditing(false)} className="h-7 rounded-md px-2 text-[11px] font-semibold text-neutral-500 hover:bg-neutral-100">Cancel</button>
@@ -1151,10 +1134,26 @@ function FamilyContactEditor({
             </div>
           </div>
         ) : (
-          <div>
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-neutral-400">Source candidates</div>
-            <div className="grid gap-1 sm:grid-cols-2">
-              {record.contactCandidates.length ? record.contactCandidates.slice(0, 4).map((candidate) => (
+          <div className="grid gap-2 xl:grid-cols-4">
+            {[
+              ['Name', contact?.name],
+              ['Phone', contact?.phone],
+              ['Relation', contact?.relationship],
+              ['Email', contact?.email],
+            ].map(([label, value]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => begin()}
+                className="min-h-12 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-left text-xs transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
+              >
+                <span className="block text-[10px] font-bold uppercase tracking-wide text-neutral-400">{label}</span>
+                <span className={`block truncate font-semibold ${value ? 'text-neutral-950' : 'text-neutral-400'}`}>{value || '...'}</span>
+              </button>
+            ))}
+            {record.contactCandidates.length ? (
+              <div className="grid gap-1 xl:col-span-4 xl:grid-cols-4">
+                {record.contactCandidates.slice(0, 4).map((candidate) => (
                 <button
                   key={`${candidate.name}-${candidate.relationship}-${candidate.source}`}
                   type="button"
@@ -1172,12 +1171,13 @@ function FamilyContactEditor({
                   <span className="block truncate font-bold text-neutral-900">{candidate.name}</span>
                   <span className="block truncate text-neutral-500">{[candidate.relationship, candidate.phone, candidate.email].filter(Boolean).join(' · ') || candidate.basis}</span>
                 </button>
-              )) : <div className="text-xs italic text-neutral-400">No source candidates found.</div>}
-            </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
       </div>
-    </section>
+    </DrawerDisclosure>
   );
 }
 
@@ -1216,7 +1216,7 @@ function MediaProgramMatches({ record }: { record: CaseRecord }) {
     <DrawerDisclosure
       title="Media & program matches"
       meta={`${record.mediaMatches.length} matched files from read-only server index`}
-      defaultOpen
+      bodyClassName="max-h-[58dvh] overflow-y-auto p-3"
     >
         {record.mediaMatches.length ? (
           <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
@@ -1274,7 +1274,7 @@ function SourceAtGlance({
     { title: 'Locations', entries: record.locationEntries },
     { title: 'Service staff', entries: record.serviceStaffEntries },
     { title: 'Service logistics', entries: record.serviceLogisticsEntries },
-  ];
+  ].filter((group) => group.entries.length);
   const sourceFacts = record.items.flatMap((item) =>
     collectTextEntries(item).slice(0, 12).map(([key, value]) => ({
       id: `${item.id}:${key}`,
@@ -1283,6 +1283,19 @@ function SourceAtGlance({
       source: item.source,
     })),
   ).slice(0, 80);
+  const relatedWork = record.items.map((item) => {
+    const facts = collectTextEntries(item).slice(0, 3);
+    return {
+      id: item.id,
+      source: item.source,
+      row: sourceRowLabel(item),
+      label: item.label,
+      status: item.status,
+      due: item.due,
+      facts,
+    };
+  });
+  const visibleSourceFacts = sourceFacts.filter((fact) => fact.value).slice(0, 14);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1290,27 +1303,68 @@ function SourceAtGlance({
         <h3 className="text-sm font-black text-neutral-950">Master sheet at a glance</h3>
         <div className="text-[11px] text-neutral-500">Read-only source values surfaced for staff.</div>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 space-y-2 overflow-hidden p-3">
         {groups.map((group) => (
           <div key={group.title} className="rounded-md border border-neutral-200 bg-white p-2">
             <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">{group.title}</div>
             <div className="mt-1 space-y-1">
-              {group.entries.length ? group.entries.slice(0, 6).map((entry, index) => (
+              {group.entries.slice(0, 5).map((entry, index) => (
                 <div key={`${group.title}-${entry.label}-${index}`} className="text-[11px] leading-tight">
                   <span className="font-bold text-neutral-600">{entry.label}: </span>
                   <span className="text-neutral-950">{entry.value}</span>
                 </div>
-              )) : <div className="text-[11px] italic text-neutral-400">...</div>}
+              ))}
             </div>
           </div>
         ))}
+
+        <div className="rounded-md border border-neutral-200 bg-white p-2">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">Related work</div>
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-bold text-neutral-500">{relatedWork.length}</span>
+          </div>
+          <div className="space-y-1">
+            {relatedWork.slice(0, 7).map((item) => (
+              <div key={item.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] leading-tight">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="min-w-0 truncate font-bold text-neutral-950">{item.label}</span>
+                  <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-neutral-500">{item.status}</span>
+                </div>
+                <div className="mt-0.5 truncate text-[10px] text-neutral-500">{item.source} · {item.row}{item.due ? ` · ${item.due}` : ''}</div>
+                {item.facts.length ? (
+                  <div className="mt-0.5 space-y-0.5">
+                    {item.facts.map(([key, value]) => (
+                      <div key={`${item.id}-${key}`} className="truncate text-[10px] text-neutral-700">
+                        <span className="font-bold text-neutral-500">{displayKey(key)}: </span>{value}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {visibleSourceFacts.length ? (
+        <div className="rounded-md border border-neutral-200 bg-white p-2">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-neutral-400">Source fields</div>
+          <div className="mt-1 grid gap-1">
+            {visibleSourceFacts.map((fact) => (
+              <div key={fact.id} className="text-[11px] leading-tight">
+                <span className="font-bold text-neutral-600">{fact.key}: </span>
+                <span className="text-neutral-950">{fact.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        ) : null}
 
         <details className="rounded-md border border-neutral-200 bg-white">
           <summary className="flex cursor-pointer list-none items-center justify-between px-2 py-1.5 text-[11px] font-bold text-neutral-600 hover:bg-neutral-50">
             Source rows
             <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px]">{record.items.length}</span>
           </summary>
-          <div className="max-h-80 overflow-y-auto border-t border-neutral-100 p-2">
+          <div className="max-h-80 overflow-hidden border-t border-neutral-100 p-2">
             <div className="space-y-1">
               {sourceFacts.length ? sourceFacts.map((fact) => (
                 <div key={fact.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] leading-tight">
@@ -2478,8 +2532,8 @@ function DeathCertDeadline({ item, effectiveStatus }: { item: DashboardItem; eff
         : 'border-emerald-300 bg-emerald-50 text-emerald-800';
   const text =
     deadline.status === 'overdue'
-      ? `MoEVR filing OVERDUE by ${Math.abs(deadline.daysRemaining)} day${Math.abs(deadline.daysRemaining) === 1 ? '' : 's'} (was due ${deadline.deadlineLabel})`
-      : `MoEVR filing due ${deadline.deadlineLabel} · ${deadline.daysRemaining} day${deadline.daysRemaining === 1 ? '' : 's'} left`;
+      ? `MoEVR filing overdue by ${Math.abs(deadline.daysRemaining)} day${Math.abs(deadline.daysRemaining) === 1 ? '' : 's'} (${deadline.deadlineLabel})`
+      : `MoEVR filing target ${deadline.deadlineLabel} · ${deadline.daysRemaining} day${deadline.daysRemaining === 1 ? '' : 's'} left`;
   return <div className={`mt-1 rounded-md border px-2 py-1 text-[11px] font-semibold ${tone}`}>{text}</div>;
 }
 
@@ -2509,7 +2563,7 @@ function GridDeathCertPill({
   const label =
     worst.status === 'overdue'
       ? `DC filing overdue ${Math.abs(worst.daysRemaining)}d`
-      : `DC due ${worst.daysRemaining}d`;
+      : `DC target ${worst.daysRemaining}d`;
   return <span className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${tone}`}>{label}</span>;
 }
 
@@ -2538,12 +2592,10 @@ function WorkflowChecklist({
   const openPrimary = openRelated[0] ?? null;
   const openFacts = openPrimary && openStepDef ? workflowFacts(openPrimary, openStepDef) : [];
   const openDetailItems = openRelated.filter((item) => item.id !== openPrimary?.id).slice(0, 5);
+  const doneCount = effectiveStates.filter((state) => state.done).length;
 
   return (
-    <section className="rounded-lg border border-neutral-200 bg-white">
-      <div className="border-b border-neutral-200 px-3 py-2">
-        <h3 className="text-sm font-bold text-neutral-950">Family checklist</h3>
-      </div>
+    <DrawerDisclosure title="Family checklist" meta={`${doneCount}/${effectiveStates.length} complete`} defaultOpen bodyClassName="max-h-[58dvh] overflow-y-auto">
       {/* Compact multi-column boxes — all 8 steps visible at a glance. Click one to edit below. */}
       <div className="grid grid-cols-2 gap-1.5 p-3 sm:grid-cols-3 xl:grid-cols-4">
         {effectiveStates.map((st) => {
@@ -2613,7 +2665,7 @@ function WorkflowChecklist({
           )}
         </div>
       ) : null}
-    </section>
+    </DrawerDisclosure>
   );
 }
 
@@ -2729,17 +2781,15 @@ function DetailDrawer({
           </div>
         </div>
 
-        {/* No page scroll: fixed-height body. Primary editables (Schedule + Status) are
-            always visible; secondary sections are collapsed boxes that expand in place and
-            scroll only inside themselves when opened on a large case. */}
+        {/* No drawer-level scroll: fixed-height body. Sections are collapsed by default
+            and each expanded section owns its bounded detail area. */}
         <div className="grid h-[calc(100dvh-73px)] grid-cols-[minmax(0,1fr)_340px] overflow-hidden max-xl:block">
           {detailLoading ? (
             <div className="col-span-2 mx-3 mt-3 rounded-md border border-[#efb70c]/30 bg-[#fff8dc] px-3 py-1.5 text-xs font-semibold text-neutral-800">
               Loading all linked rows and files for this family.
             </div>
           ) : null}
-          {/* ONE primary scroll for the whole drawer. Collapsible sections expand inline. */}
-          <div className="min-h-0 space-y-3 overflow-y-auto px-3 pb-12 pt-3">
+          <div className="min-h-0 space-y-2 overflow-hidden px-3 pb-3 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
             <WorkflowChecklist
@@ -2754,7 +2804,7 @@ function DetailDrawer({
             <div className="space-y-3">
               <MediaProgramMatches record={record} />
 
-              <DrawerDisclosure title="Recent audit" meta="Staff edits for this family" defaultOpen bodyClassName="divide-y divide-neutral-100">
+              <DrawerDisclosure title="Recent audit" meta="Staff edits for this family" bodyClassName="max-h-[58dvh] overflow-y-auto divide-y divide-neutral-100">
                   {(() => {
                     const caseAudit = auditEntries
                       .filter((entry) => record.items.some((item) => item.id === entry.itemId) || entry.itemId.startsWith(`${record.key}:`))
@@ -2775,52 +2825,6 @@ function DetailDrawer({
                       <div className="px-3 py-3 text-xs italic text-neutral-400">No staff edits recorded for this family yet.</div>
                     );
                   })()}
-              </DrawerDisclosure>
-
-              <DrawerDisclosure title="Related work" meta={`${record.items.length} linked source rows and files`} bodyClassName="divide-y divide-neutral-100">
-              {record.items.map((item) => (
-                <div key={item.id} className="grid gap-3 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.4fr)_minmax(150px,auto)]">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] font-bold text-neutral-600">{item.source}</span>
-                      <span className="text-[11px] text-neutral-400">{sourceRowLabel(item)}</span>
-                    </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                      <EditableField label="Work item" value={item.label} itemId={item.id} field="label" onUpdate={onUpdate} />
-                      <EditableField label="Assigned to" value={item.owner} itemId={item.id} field="owner" onUpdate={onUpdate} />
-                      <EditableField label="Due / time" value={item.due} itemId={item.id} field="due" onUpdate={onUpdate} />
-                      {item.area === 'death-cert' ? (
-                        <div className="sm:col-span-2 xl:col-span-1 2xl:col-span-2">
-                          <EditableField
-                            label="Date of death"
-                            value={item.dateOfDeath ?? ''}
-                            itemId={item.id}
-                            field="date_of_death"
-                            inputType="date"
-                            placeholder="YYYY-MM-DD"
-                            onUpdate={onUpdate}
-                          />
-                          <DeathCertDeadline item={item} effectiveStatus={statusOverrides[item.id]?.status ?? item.status} />
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="min-w-0">
-                    <EditableField label="Staff note" value={item.detail} itemId={item.id} field="detail" multiline onUpdate={onUpdate} />
-                    <div className="mt-2 grid gap-1 md:grid-cols-2 2xl:grid-cols-3">
-                      {collectTextEntries(item).slice(0, 10).map(([key, value]) => (
-                        <div key={`${item.id}-${key}`} className="rounded-md bg-neutral-50 px-2 py-1 text-xs">
-                          <span className="font-semibold text-neutral-500">{displayKey(key)}: </span>
-                          <span className="text-neutral-800">{value}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex items-start justify-start xl:justify-end">
-                    <StatusChip item={item} override={statusOverrides[item.id]} onCommit={onCommit} />
-                  </div>
-                </div>
-              ))}
               </DrawerDisclosure>
             </div>
           </div>
