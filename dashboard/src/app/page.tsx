@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   getDashboardCaseContacts,
+  getGoogleCalendarEvents,
   getMilestones,
   getOperationalStatuses,
   getOperationsFeed,
@@ -13,8 +14,9 @@ import {
   saveMilestone,
   saveOperationalStatus,
   saveWorkflowState,
-  syncWeeklyServiceSchedule,
+  syncMasterSheet,
   updateOperationItem,
+  type GoogleCalendarEvent,
   type OperationsFeed,
 } from '@/lib/api';
 import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
@@ -1957,13 +1959,14 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
 type CalendarMode = 'day' | 'week' | 'month' | 'year';
 type CaseCalendarEvent = {
   id: string;
-  caseKey: string;
+  caseKey?: string;
   caseName: string;
   label: string;
   date: Date;
   dateLabel: string;
   location: string;
   source: string;
+  externalUrl?: string;
 };
 
 function calendarRange(mode: CalendarMode, focusDate: Date) {
@@ -2047,18 +2050,45 @@ function calendarEventsFor(records: CaseRecord[], overrides: MilestoneOverrideMa
 }
 
 function CalendarEventPill({ event, onOpen }: { event: CaseCalendarEvent; onOpen: (caseKey: string) => void }) {
+  const clickable = Boolean(event.caseKey || event.externalUrl);
+  const handleClick = () => {
+    if (event.caseKey) onOpen(event.caseKey);
+    else if (event.externalUrl) window.open(event.externalUrl, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <button
       type="button"
       data-case-calendar-event="true"
-      onClick={() => onOpen(event.caseKey)}
+      onClick={handleClick}
+      disabled={!clickable}
       className="block w-full rounded-md border border-neutral-200 bg-white px-2 py-1 text-left text-[11px] leading-tight shadow-sm transition hover:border-[#efb70c] hover:bg-[#fff7d7]"
       title={`${event.label}: ${event.caseName}${event.location ? `, ${event.location}` : ''}`}
     >
       <span className="block truncate font-bold text-neutral-950">{event.caseName}</span>
-      <span className="block truncate text-neutral-600">{event.label}{event.location ? ` · ${event.location}` : ''}</span>
+      <span className="block truncate text-neutral-600">{event.label}{event.location ? ` - ${event.location}` : ''}</span>
     </button>
   );
+}
+
+function googleCalendarEventsFor(events: GoogleCalendarEvent[]): CaseCalendarEvent[] {
+  return events.flatMap((event) => {
+      const date = new Date(event.start);
+      if (Number.isNaN(date.getTime())) return [];
+      const dateLabel = event.allDay
+        ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+        : date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return [{
+        id: event.id,
+        caseName: event.title,
+        label: event.calendarName,
+        date,
+        dateLabel,
+        location: event.location,
+        source: 'Google Calendar',
+        externalUrl: event.htmlLink,
+      } satisfies CaseCalendarEvent];
+    });
 }
 
 function CalendarBoard({
@@ -2072,8 +2102,39 @@ function CalendarBoard({
 }) {
   const [mode, setMode] = useState<CalendarMode>('week');
   const [focusDate, setFocusDate] = useState(() => new Date());
-  const events = useMemo(() => calendarEventsFor(records, milestoneOverrides), [records, milestoneOverrides]);
   const { start, end } = calendarRange(mode, focusDate);
+  const [googleEvents, setGoogleEvents] = useState<GoogleCalendarEvent[]>([]);
+  const [googleCalendarUrl, setGoogleCalendarUrl] = useState('');
+  const [googleCalendarConfigured, setGoogleCalendarConfigured] = useState(true);
+  const [googleCalendarError, setGoogleCalendarError] = useState('');
+  const rangeStart = start.toISOString();
+  const rangeEnd = end.toISOString();
+  const events = useMemo(() => {
+    const sheetEvents = calendarEventsFor(records, milestoneOverrides);
+    const realCalendarEvents = googleCalendarEventsFor(googleEvents);
+    return [...realCalendarEvents, ...sheetEvents]
+      .sort((a, b) => a.date.getTime() - b.date.getTime() || a.caseName.localeCompare(b.caseName));
+  }, [records, milestoneOverrides, googleEvents]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setGoogleCalendarError('');
+    getGoogleCalendarEvents(rangeStart, rangeEnd)
+      .then((response) => {
+        if (cancelled) return;
+        setGoogleEvents(response.events);
+        setGoogleCalendarUrl(response.calendar_url);
+        setGoogleCalendarConfigured(response.configured);
+      })
+      .catch((error: any) => {
+        if (cancelled) return;
+        setGoogleEvents([]);
+        setGoogleCalendarError(error?.message || 'Google Calendar events could not be loaded.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeStart, rangeEnd]);
   const visibleEvents = events.filter((event) => event.date >= start && event.date <= end);
   const eventsByDay = new Map<string, CaseCalendarEvent[]>();
   for (const event of visibleEvents) {
@@ -2100,6 +2161,16 @@ function CalendarBoard({
     <section className="rounded-lg border border-neutral-200 bg-white">
       <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 px-3 py-2">
         <h2 className="mr-auto text-sm font-black text-neutral-950">Calendar</h2>
+        {googleCalendarUrl ? (
+          <a
+            href={googleCalendarUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="h-8 rounded-md border border-neutral-200 px-2 py-2 text-xs font-bold leading-none text-neutral-700 hover:bg-neutral-50"
+          >
+            Open Google Calendar
+          </a>
+        ) : null}
         <div className="flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5">
           {(['day', 'week', 'month', 'year'] as CalendarMode[]).map((nextMode) => (
             <button
@@ -2118,6 +2189,16 @@ function CalendarBoard({
       </div>
 
       <div className="px-3 py-2 text-sm font-bold text-neutral-800">{calendarTitle(mode, focusDate)}</div>
+      {!googleCalendarConfigured ? (
+        <div className="mx-3 mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+          Set GGFC_GOOGLE_CALENDAR_IDS to show the funeral home Google Calendar here.
+        </div>
+      ) : null}
+      {googleCalendarError ? (
+        <div className="mx-3 mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-900">
+          {googleCalendarError}
+        </div>
+      ) : null}
 
       {mode === 'day' ? (
         <div className="space-y-2 px-3 pb-3">
@@ -3119,12 +3200,12 @@ export default function BoardPage() {
       });
   }, []);
 
-  async function syncWeeklySheet() {
+  async function syncMasterSheetToDashboard() {
     setSheetSyncing(true);
     setSheetSyncMessage('');
     try {
-      const response = await syncWeeklyServiceSchedule();
-      setSheetSyncMessage(`Imported ${response.data.imported} master sheet rows.`);
+      const response = await syncMasterSheet();
+      setSheetSyncMessage(`Imported ${response.data.imported} items from ${response.data.raw_rows} staged master sheet rows.`);
       await loadOperationsFeed({ query: search.trim() });
     } catch (error: any) {
       setSheetSyncMessage(error.message || 'Master sheet sync failed.');
@@ -3498,7 +3579,7 @@ export default function BoardPage() {
         onToggleStep={commitWorkflowStep}
         onCommitMilestone={commitMilestone}
         onCommitContact={commitContact}
-        onSyncSources={syncWeeklySheet}
+        onSyncSources={syncMasterSheetToDashboard}
       />
 
       {syncState === 'unavailable' ? (

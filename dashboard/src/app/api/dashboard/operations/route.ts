@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
 import { dashboardItems, sanitizeSourcePayload, type DashboardItem } from '@/lib/operation-items';
-import { probeGoogleSheetsConnection } from '@/lib/weekly-service-sync';
+import { probeGoogleSheetsConnection } from '@/lib/master-sheet-sync';
+import { hasGoogleCalendarConfig } from '@/lib/google-calendar-sync';
+import { hasGoogleServiceAccountConfig } from '@/lib/google-service-account';
 
 type SourceStatus = {
   id: string;
@@ -327,6 +329,39 @@ async function checkSmbShare(checkedAt: string): Promise<SourceStatus> {
   }
 }
 
+async function checkGoogleCalendar(checkedAt: string): Promise<SourceStatus> {
+  if (!hasGoogleServiceAccountConfig()) {
+    return {
+      id: 'google-calendar',
+      label: 'Golden Gate Google Calendar',
+      status: 'not_configured',
+      mode: 'read_only',
+      detail: 'Set Google service account credentials and share the funeral home calendar with that service account.',
+      checked_at: checkedAt,
+    };
+  }
+
+  if (!hasGoogleCalendarConfig()) {
+    return {
+      id: 'google-calendar',
+      label: 'Golden Gate Google Calendar',
+      status: 'not_configured',
+      mode: 'read_only',
+      detail: 'Set GGFC_GOOGLE_CALENDAR_IDS to show the funeral home Google Calendar in the dashboard.',
+      checked_at: checkedAt,
+    };
+  }
+
+  return {
+    id: 'google-calendar',
+    label: 'Golden Gate Google Calendar',
+    status: 'connected',
+    mode: 'read_only',
+    detail: 'Calendar source configured read-only. Events load directly in the Calendar view.',
+    checked_at: checkedAt,
+  };
+}
+
 export async function GET(request: Request) {
   const session = await requireStaff();
   if (isAuthError(session)) return session;
@@ -340,6 +375,7 @@ export async function GET(request: Request) {
     ? []
     : [
         checkGoogleSheet(checkedAt),
+        checkGoogleCalendar(checkedAt),
         checkSmbShare(checkedAt),
         Promise.resolve({
           id: 'remotepc',

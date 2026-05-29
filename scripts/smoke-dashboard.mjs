@@ -296,7 +296,7 @@ async function main() {
 
   await check('no source-system write requests occurred during smoke run', async () => {
     assert(sourceWriteRequests.length === 0, sourceWriteRequests.join('\n'));
-    const syncSource = readFileSync(join(process.cwd(), 'dashboard/src/lib/weekly-service-sync.ts'), 'utf8');
+    const syncSource = readFileSync(join(process.cwd(), 'dashboard/src/lib/master-sheet-sync.ts'), 'utf8');
     assert(syncSource.includes('/auth/spreadsheets.readonly'), 'Google Sheets sync is not using readonly scope');
     assert(!/spreadsheets\.values\.(?:update|append|batchUpdate)/.test(syncSource), 'Google Sheets write API detected in sync source');
   });
