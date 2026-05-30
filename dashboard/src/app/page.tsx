@@ -646,30 +646,34 @@ function pickIdentityStatus(items: DashboardItem[]) {
 // Numeric sort value for a case's highest Golden Gate ref (YY-NNN): (year*100000 + sequence), so
 // higher = newer. -1 when the case has no ref yet (those sort last under "Case # new→old").
 function caseNumberSortValue(record: CaseRecord) {
-  const maxYear = new Date().getFullYear() + 1;
-  let best = -1;
-  for (const cn of record.sourceCaseNumbers) {
-    const match = cn.match(/^(\d{2})-(\d{3,4})$/);
-    if (!match) continue;
-    const year = 2000 + Number(match[1]);
-    // Ignore implausible future-year prefixes (data-entry typos like 32-/34-) so they don't sort
-    // above legitimate current-year cases as if they were the newest.
-    if (year > maxYear) continue;
-    best = Math.max(best, year * 100000 + Number(match[2]));
-  }
-  return best;
+  // Sort by the SAME number the Case # column shows (canonicalCaseRef), so order matches the column.
+  const match = canonicalCaseRef(record).match(/^(\d{2})-(\d{1,4})$/);
+  if (!match) return -1;
+  const year = 2000 + Number(match[1]);
+  // Ignore implausible future-year prefixes (data-entry typos like 32-/34-) so they don't sort
+  // above legitimate current-year cases as if they were the newest.
+  if (year > new Date().getFullYear() + 1) return -1;
+  return year * 100000 + Number(match[2]);
 }
 
-// One stable, canonical Golden Gate ref to display per case: the lowest NN-NNN whose year matches
-// the case's death-year (falling back to the lowest overall). Deterministic so it does NOT change
-// when opening a case loads more of its rows (a case legitimately spans 2 registers, e.g. death-cert
-// + crematory; the grid shows one canonical number, the drawer can show all).
+// Lowest NN-NNN whose year matches the case's death-year (fallback when there is no death-cert or
+// crematory number — e.g. cremains/belongings/arrangement-only or first-call cases). Deterministic.
 function primaryCaseRef(record: CaseRecord): string {
   const refs = record.sourceCaseNumbers.filter((r) => /^\d{2}-\d{3,4}$/.test(r));
   if (!refs.length) return record.sourceCaseNumbers[0] ?? '';
   const year = (record.key.split('|')[1] ?? '').slice(2);
   const yearMatch = year ? refs.filter((r) => r.startsWith(`${year}-`)) : [];
   return (yearMatch.length ? yearMatch : refs).slice().sort()[0];
+}
+
+// Golden Gate's canonical case number for the case: their Death Certificate "Case" number when one
+// exists (that sheet column is literally labeled "Case"), else the Crematory Log number, else any
+// other year-matching NN-NNN. The Crematory and Death-Certificate logs each run their OWN per-year
+// sequence, so a case can carry two different NN-NNNs (e.g. DC 26-089 + Crematory 26-127); this
+// picks the one Golden Gate identifies the case by. Shown in the Case # column and used for sorting.
+function canonicalCaseRef(record: CaseRecord): string {
+  const refs = caseRefsFromSource(record);
+  return refs.dc || refs.cremation || primaryCaseRef(record);
 }
 
 function caseKeyForItem(item: DashboardItem) {
@@ -3038,9 +3042,9 @@ function DetailDrawer({
                 {record.sourceCaseNumbers.length > 0 && (
                   <span
                     className="rounded border border-neutral-200 px-1.5 py-0.5 font-mono text-[11px] text-neutral-600"
-                    title="Golden Gate per-register case number (not a global ID)"
+                    title="Golden Gate case number — Death Certificate 'Case' number when present, else Crematory Log number"
                   >
-                    GG ref {primaryCaseRef(record)}
+                    Case {canonicalCaseRef(record)}
                   </span>
                 )}
                 {record.identityStatus === 'unverified' && (
@@ -3804,9 +3808,9 @@ export default function BoardPage() {
                 aria-label={`Open details for ${record.name}`}
               >
                 <div className="flex items-center px-2 py-1.5 font-mono text-[11px] text-neutral-500 max-lg:hidden">
-                  {primaryCaseRef(record) ? (
-                    <span title="Golden Gate per-register reference (not a global ID)">
-                      {primaryCaseRef(record)}
+                  {canonicalCaseRef(record) ? (
+                    <span title="Golden Gate case number — the Death Certificate 'Case' number when one exists, else the Crematory Log number (each log runs its own per-year sequence)">
+                      {canonicalCaseRef(record)}
                     </span>
                   ) : record.items.some((item) => item.source === 'First Call') ? (
                     <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-bold uppercase text-amber-800">New</span>
