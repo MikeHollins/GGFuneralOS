@@ -19,8 +19,10 @@ function oneOf(value: unknown, allowed: string[], fallback: string) {
 }
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-// Suggested next case number for the current year: highest YY-NNN we've seen + 1. It's a best-guess
-// the funeral director can override in the drawer (Golden Gate may be on a different counter).
+// Suggested next case number for the current year: highest Death-Certificate YY-NNN + 1. The
+// death-cert log is Golden Gate's authoritative case register (every case — cremation or burial —
+// gets a death cert), so a new first call takes the next number in THAT sequence, not the crematory
+// counter (which runs far ahead and includes cremations for other homes). Director can override.
 export async function GET() {
   const session = await requireStaff();
   if (isAuthError(session)) return session;
@@ -29,7 +31,7 @@ export async function GET() {
   const rows = await sql(
     `SELECT max(split_part(source_case_number, '-', 2)::int) AS max_seq
      FROM operational_items
-     WHERE is_archived = false AND source_case_number ~ $1`,
+     WHERE is_archived = false AND source ILIKE '%death cert%' AND source_case_number ~ $1`,
     [`^${yy}-[0-9]{3,4}$`],
   );
   const next = Number(rows[0]?.max_seq ?? 0) + 1;
@@ -87,7 +89,11 @@ export async function POST(request: Request) {
       name: displayName,
       ...(caseNumber ? { source_case_number: caseNumber } : {}),
     };
-    await sql(
+    // All four writes run as ONE atomic transaction: a first call either fully opens a case (board
+    // row + intake snapshot + NOK contact + workflow step) or nothing is written — never a half-made
+    // case if one statement fails. The neon HTTP driver runs the array under a single BEGIN/COMMIT.
+    await sql.transaction([
+    sql(
       `INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
           source_origin, source_ref, source_payload, source_seen_at, date_of_birth, date_of_death,
@@ -95,10 +101,10 @@ export async function POST(request: Request) {
        VALUES ($1,'arrangement',$2,'',$3,'','First Call','Unconfirmed','normal',$4::jsonb,
           'ggfuneralos',$1,$5::jsonb, now(), $6, $7, $9, $8::date, now(), now())`,
       [itemId, displayName, nokName, JSON.stringify(statusOptions.arrangement), JSON.stringify(payload), dob || null, dod, dod, caseNumber || null],
-    );
+    ),
 
     // 2) System-of-record — the immutable first-call intake snapshot.
-    await sql(
+    sql(
       `INSERT INTO first_call_intake
          (case_key, operational_item_id, deceased_first, deceased_middle, deceased_last, deceased_suffix,
           date_of_birth, date_of_death, time_of_death, sex,
@@ -120,25 +126,26 @@ export async function POST(request: Request) {
         dispositionIntent, pacemaker, bool(body.prearrangement),
         clean(body.arrangement_conference_at, 40) || null, clean(body.director_assigned, 120) || null, clean(body.notes, 1000), initials, caseNumber || null,
       ],
-    );
+    ),
 
     // 3) Canonical family contact (NOK) — the editable current contact the board/drawer reads.
-    await sql(
+    sql(
       `INSERT INTO case_contact_state (case_key, contact_name, relationship, phone, email, notes, staff_initials, updated_at)
        VALUES ($1,$2,$3,$4,$5,'',$6, now())
        ON CONFLICT (case_key) DO UPDATE SET
          contact_name = EXCLUDED.contact_name, relationship = EXCLUDED.relationship,
          phone = EXCLUDED.phone, email = EXCLUDED.email, staff_initials = EXCLUDED.staff_initials, updated_at = now()`,
       [caseKey, nokName, clean(body.nok_relationship, 80), clean(body.nok_phone, 40), clean(body.nok_email, 160), initials],
-    );
+    ),
 
     // 4) Workflow — first-call step is done by definition once the intake is captured.
-    await sql(
+    sql(
       `INSERT INTO case_workflow_state (case_key, step_id, state, staff_initials, note, updated_at)
        VALUES ($1,'first-call','done',$2,'First call intake recorded', now())
        ON CONFLICT (case_key, step_id) DO UPDATE SET state = 'done', staff_initials = EXCLUDED.staff_initials, updated_at = now()`,
       [caseKey, initials],
-    );
+    ),
+    ]);
 
     return NextResponse.json({ data: { case_key: caseKey, item_id: itemId, name: displayName, date_of_death: dod } });
   } catch (error) {
