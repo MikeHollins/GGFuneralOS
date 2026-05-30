@@ -105,9 +105,11 @@ async function main() {
           if (c.dod) continue;
           stats.wouldFill++;
           if (APPLY) {
+            // Enrichment, not a staff edit: do NOT flag edited_fields, so a real upstream DOD (if
+            // Golden Gate ever adds one) can supersede this. fill-only-empty (the WHERE guard) + the
+            // sync's keep-existing-when-incoming-empty rule preserve it across re-syncs.
             await sql(
-              `UPDATE operational_items SET date_of_death = $2,
-                 edited_fields = edited_fields || '{"date_of_death": true}'::jsonb, updated_at = now()
+              `UPDATE operational_items SET date_of_death = $2, updated_at = now()
                WHERE item_id = $1 AND coalesce(date_of_death,'') = ''`,
               [c.item_id, dodIso],
             );
