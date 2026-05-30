@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { getSql } from './db';
 import { normalizeHeader } from './csv';
+import { caseMatchKey, caseNumberYear } from './case-identity';
 import { dashboardItems, maskSensitiveValue, statusOptions, type DashboardItem, type OperationArea } from './operation-items';
 import { getGoogleAccessToken, googleFetch } from './google-service-account';
 
@@ -753,13 +754,8 @@ function slug(value: string) {
   return normalizeHeader(value).replace(/_/g, '-');
 }
 
-function caseMatchKey(value: string) {
-  // Keep Jr/Sr/II/III — they distinguish different people and stripping them merged cases.
-  return normalizeHeader(value)
-    .replace(/_/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// caseMatchKey / caseNumberYear are the canonical identity helpers (see ./case-identity), imported
+// below and reused by first-call intake so originated cases thread with synced rows by the same key.
 
 function recordToItem(record: Record<string, string>, config: SheetConfig): DashboardItem | null {
   const label = labelFor(record, config);
@@ -1090,14 +1086,6 @@ function importRowFor(item: DashboardItem, record: Record<string, string>, sourc
 // and the only trustworthy year anchor is the death-cert/crematory case-number prefix. We turn a
 // 2-digit prefix into a full year and reject implausible values so data-entry noise (e.g. "32-",
 // "34-") can't mint a fake year bucket.
-function caseNumberYear(caseNumber: string | null | undefined): string | null {
-  const match = caseNumber?.match(/^(\d{2})-\d{3,4}$/);
-  if (!match) return null;
-  const year = 2000 + Number(match[1]);
-  const currentYear = new Date().getFullYear();
-  return year >= 2000 && year <= currentYear + 1 ? String(year) : null;
-}
-
 // Canonical case-identity resolver (single source of truth, §13). Runs over the full import set
 // so name-only logs (cremains/belongings) can borrow the death-year from the same person's
 // numbered death-cert/crematory row. Fail-closed: when a name carries more than one death-year we
