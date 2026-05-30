@@ -2732,6 +2732,13 @@ function GridDeathCertPill({
     if (effective === 'filed') continue;
     const deadline = deathCertDeadline(item.dateOfDeath);
     if (!deadline || deadline.status === 'ok') continue;
+    // Only flag the board pill for OPERATIONALLY LIVE deadlines. An unfiled cert whose death was
+    // long ago (e.g. a backfilled historical DOD) is reference data, not an actionable filing
+    // alert — gating by recency keeps the board's overdue pills meaningful instead of wallpaper.
+    const dod = item.dateOfDeath && /^\d{4}-\d{2}-\d{2}$/.test(item.dateOfDeath)
+      ? new Date(`${item.dateOfDeath}T12:00:00`)
+      : null;
+    if (dod && (Date.now() - dod.getTime()) / 86_400_000 > 45) continue;
     if (!worst || deadline.daysRemaining < worst.daysRemaining) {
       worst = { status: deadline.status, daysRemaining: deadline.daysRemaining };
     }
