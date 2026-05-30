@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createFirstCall } from '@/lib/api';
+import { createFirstCall, getFirstCallSuggestion } from '@/lib/api';
 
 // Stable, module-level field components so typing never loses focus (re-created components remount).
 function Field({ label, value, onChange, required, type = 'text', placeholder }: {
@@ -74,6 +74,15 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Pre-fill the suggested next case number (editable — Golden Gate may be on a different counter).
+  useEffect(() => {
+    let active = true;
+    getFirstCallSuggestion()
+      .then((r) => { if (active) setF((cur) => (cur.case_number ? cur : { ...cur, case_number: r.data.suggested_case_number })); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   async function submit() {
     setError('');
     if (!val('deceased_last').trim()) return setError("Deceased's last name is required.");
@@ -116,6 +125,9 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
 
           <SectionTitle n={1}>The deceased</SectionTitle>
           <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <Field label="Case number (suggested — edit if Golden Gate is on a different one)" value={val('case_number')} onChange={upd('case_number')} placeholder="YY-NNN" />
+            </div>
             <Field label="First name" value={val('deceased_first')} onChange={upd('deceased_first')} />
             <Field label="Middle" value={val('deceased_middle')} onChange={upd('deceased_middle')} />
             <Field label="Last name" value={val('deceased_last')} onChange={upd('deceased_last')} required />

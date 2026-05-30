@@ -56,6 +56,9 @@ export const getOperationsFeed = (params?: { q?: string; caseKey?: string; limit
   return apiFetch<OperationsFeed>(`/dashboard/operations${query ? `?${query}` : ''}`);
 };
 
+export const getFirstCallSuggestion = () =>
+  apiFetch<{ data: { suggested_case_number: string } }>('/dashboard/first-call');
+
 export const createFirstCall = (payload: Record<string, unknown>) =>
   apiFetch<{ data: { case_key: string; item_id: string; name: string; date_of_death: string } }>(
     '/dashboard/first-call',

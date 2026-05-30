@@ -19,6 +19,23 @@ function oneOf(value: unknown, allowed: string[], fallback: string) {
 }
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Suggested next case number for the current year: highest YY-NNN we've seen + 1. It's a best-guess
+// the funeral director can override in the drawer (Golden Gate may be on a different counter).
+export async function GET() {
+  const session = await requireStaff();
+  if (isAuthError(session)) return session;
+  const sql = getSql();
+  const yy = String(new Date().getFullYear()).slice(2);
+  const rows = await sql(
+    `SELECT max(split_part(source_case_number, '-', 2)::int) AS max_seq
+     FROM operational_items
+     WHERE is_archived = false AND source_case_number ~ $1`,
+    [`^${yy}-[0-9]{3,4}$`],
+  );
+  const next = Number(rows[0]?.max_seq ?? 0) + 1;
+  return NextResponse.json({ data: { suggested_case_number: `${yy}-${String(next).padStart(3, '0')}` } });
+}
+
 export async function POST(request: Request) {
   const session = await requireStaff();
   if (isAuthError(session)) return session;
@@ -34,6 +51,7 @@ export async function POST(request: Request) {
     const suffix = clean(body.deceased_suffix, 16);
     const dod = clean(body.date_of_death, 10);
     const nokName = clean(body.nok_name, 120);
+    const caseNumber = clean(body.case_number, 20);
     const initials = clean(body.created_by_initials, 5).toUpperCase();
 
     if (!last) return NextResponse.json({ error: "Deceased's last name is required" }, { status: 400 });
@@ -67,15 +85,16 @@ export async function POST(request: Request) {
       identity_basis: 'first-call intake',
       first_call: 'true',
       name: displayName,
+      ...(caseNumber ? { source_case_number: caseNumber } : {}),
     };
     await sql(
       `INSERT INTO operational_items
          (item_id, area, label, detail, owner, due_text, source, status_default, priority, options,
           source_origin, source_ref, source_payload, source_seen_at, date_of_birth, date_of_death,
-          business_date, updated_at, created_at)
+          source_case_number, business_date, updated_at, created_at)
        VALUES ($1,'arrangement',$2,'',$3,'','First Call','Unconfirmed','normal',$4::jsonb,
-          'ggfuneralos',$1,$5::jsonb, now(), $6, $7, $8::date, now(), now())`,
-      [itemId, displayName, nokName, JSON.stringify(statusOptions.arrangement), JSON.stringify(payload), dob || null, dod, dod],
+          'ggfuneralos',$1,$5::jsonb, now(), $6, $7, $9, $8::date, now(), now())`,
+      [itemId, displayName, nokName, JSON.stringify(statusOptions.arrangement), JSON.stringify(payload), dob || null, dod, dod, caseNumber || null],
     );
 
     // 2) System-of-record — the immutable first-call intake snapshot.
@@ -87,9 +106,9 @@ export async function POST(request: Request) {
           caller_name, caller_phone, caller_relationship, nok_name, nok_phone, nok_email, nok_relationship,
           pickup_location, ready_for_pickup, release_authorized, embalm_permission, removal_team,
           disposition_intent, pacemaker_present, prearrangement,
-          arrangement_conference_at, director_assigned, notes, created_by_initials)
+          arrangement_conference_at, director_assigned, notes, created_by_initials, case_number)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-          $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)`,
+          $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)`,
       [
         caseKey, itemId, first, middle, last, suffix,
         dob || null, dod, clean(body.time_of_death, 20) || null, clean(body.sex, 20) || null,
@@ -99,7 +118,7 @@ export async function POST(request: Request) {
         nokName, clean(body.nok_phone, 40) || null, clean(body.nok_email, 160) || null, clean(body.nok_relationship, 80) || null,
         clean(body.pickup_location, 300) || null, bool(body.ready_for_pickup), bool(body.release_authorized), embalm, clean(body.removal_team, 120) || null,
         dispositionIntent, pacemaker, bool(body.prearrangement),
-        clean(body.arrangement_conference_at, 40) || null, clean(body.director_assigned, 120) || null, clean(body.notes, 1000), initials,
+        clean(body.arrangement_conference_at, 40) || null, clean(body.director_assigned, 120) || null, clean(body.notes, 1000), initials, caseNumber || null,
       ],
     );
 
