@@ -19,6 +19,7 @@ type ItemQuery = {
   limit?: number;
   query?: string;
   caseKey?: string;
+  perArea?: number;
 };
 
 function canonicalCaseKeySql() {
@@ -160,6 +161,7 @@ async function getItems({
   limit = 750,
   query = '',
   caseKey = '',
+  perArea = PER_AREA_LIMIT,
 }: ItemQuery) {
   const sql = getSql();
   await seedItemsIfEmpty();
@@ -178,9 +180,9 @@ async function getItems({
        ORDER BY business_date DESC NULLS LAST, created_at DESC
        LIMIT $${params.length}`;
   } else {
-    params.push(PER_AREA_LIMIT);
+    params.push(perArea);
     const perAreaIndex = params.length;
-    params.push(Math.max(limit, PER_AREA_LIMIT * 8));
+    params.push(Math.max(limit, perArea * 8));
     const limitIndex = params.length;
     listSql = `SELECT ${ITEM_COLUMNS} FROM (
          SELECT ${ITEM_COLUMNS}, business_date,
@@ -429,6 +431,7 @@ export async function GET(request: Request) {
   const query = url.searchParams.get('q') ?? '';
   const caseKey = url.searchParams.get('case_key') ?? '';
   const initialLimit = cleanLimit(url.searchParams.get('limit'), caseKey ? 2000 : 750);
+  const perArea = cleanLimit(url.searchParams.get('per_area'), PER_AREA_LIMIT);
   const sourceChecks = caseKey
     ? []
     : [
@@ -445,7 +448,7 @@ export async function GET(request: Request) {
         }),
       ];
   const [feed, itemAudit, metrics, ...sources] = await Promise.all([
-    getItems({ limit: initialLimit, query, caseKey }),
+    getItems({ limit: initialLimit, query, caseKey, perArea }),
     getRecentItemAudit(),
     getDashboardMetrics(),
     ...sourceChecks,

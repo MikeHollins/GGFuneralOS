@@ -3030,6 +3030,10 @@ export default function BoardPage() {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count'>('name');
   const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
+  // 0 = use the server's default per-area window (250). "Show more" raises this to fetch deeper
+  // history from the server on demand; the default page load never sends it, so normal load is
+  // unchanged and only an explicit click pays the heavier fetch.
+  const [feedPerArea, setFeedPerArea] = useState(0);
   const [items, setItems] = useState<DashboardItem[]>([]);
   const [feedMeta, setFeedMeta] = useState<FeedMeta | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<Record<string, StatusOverride>>({});
@@ -3065,6 +3069,7 @@ export default function BoardPage() {
   useEffect(() => {
     const delay = search.trim() ? 250 : 0;
     const timeout = window.setTimeout(() => {
+      setFeedPerArea(0);
       loadOperationsFeed({ query: search.trim() });
     }, delay);
     return () => window.clearTimeout(timeout);
@@ -3091,7 +3096,7 @@ export default function BoardPage() {
     window.dispatchEvent(new CustomEvent('ggfo-view-change'));
   }
 
-  function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number } = {}) {
+  function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number; perArea?: number } = {}) {
     const requestId = options.merge ? operationsRequestRef.current : operationsRequestRef.current + 1;
     if (!options.merge) operationsRequestRef.current = requestId;
     const isDetailFetch = Boolean(options.merge && options.caseKey);
@@ -3104,6 +3109,7 @@ export default function BoardPage() {
       q: options.query || undefined,
       caseKey: options.caseKey || undefined,
       limit: options.limit,
+      perArea: options.perArea,
     })
       .then((response) => {
         if (!options.merge && requestId !== operationsRequestRef.current) return;
@@ -3533,6 +3539,22 @@ export default function BoardPage() {
   const headerMetrics = feedMeta?.metrics;
   const casesThisMonth = headerMetrics?.cases_this_month ?? 0;
   const casesThisYear = headerMetrics?.cases_this_year ?? 0;
+  // "Show more": first reveal records already loaded on the client; once those are exhausted,
+  // fetch a deeper per-area window from the server (capped at 2000/area). The server side is
+  // read-only — this only widens how much of Golden Gate's data we mirror into our view.
+  const moreLoadedClientSide = matchingRecords.length > recordLimit;
+  const canFetchDeeper = Boolean(feedMeta?.limited) && (feedPerArea || 250) < 2000;
+  const showMoreVisible = !operationsLoading && !operationsError && (moreLoadedClientSide || canFetchDeeper);
+  function handleShowMore() {
+    if (moreLoadedClientSide) {
+      setRecordLimit((limit) => limit + visibleRecordLimit);
+      return;
+    }
+    const next = Math.min((feedPerArea || 250) + 250, 2000);
+    setFeedPerArea(next);
+    setRecordLimit((limit) => limit + visibleRecordLimit);
+    loadOperationsFeed({ query: search.trim(), perArea: next });
+  }
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
@@ -3663,14 +3685,16 @@ export default function BoardPage() {
                 {search.trim() ? 'No families matched this search.' : 'No families matched this view.'}
               </div>
             )}
-            {!operationsLoading && !operationsError && matchingRecords.length > recordLimit ? (
+            {showMoreVisible ? (
               <div className="px-4 py-3 text-center">
                 <button
                   type="button"
-                  onClick={() => setRecordLimit((limit) => limit + visibleRecordLimit)}
+                  onClick={handleShowMore}
                   className="h-8 rounded-md border border-neutral-200 bg-white px-4 text-xs font-bold text-neutral-700 hover:bg-neutral-100"
                 >
-                  Show more ({(matchingRecords.length - recordLimit).toLocaleString()} more)
+                  {moreLoadedClientSide
+                    ? `Show more (${(matchingRecords.length - recordLimit).toLocaleString()} more loaded)`
+                    : 'Load more from source'}
                 </button>
               </div>
             ) : null}
