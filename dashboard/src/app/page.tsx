@@ -3112,8 +3112,7 @@ function DetailDrawer({
 export default function BoardPage() {
   const [activeView, setActiveView] = useState<ViewId>('active');
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count' | 'casenum'>('casenum');
-  const [attentionOnly, setAttentionOnly] = useState(false);
+  const [sortMode] = useState<'name' | 'recent' | 'count' | 'casenum'>('casenum');
   const [registerFilter, setRegisterFilter] = useState('');
   const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
   // 0 = use the server's default per-area window (250). "Show more" raises this to fetch deeper
@@ -3598,11 +3597,6 @@ export default function BoardPage() {
           milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized) ||
           contactSearchText(record, contactOverrides).toLowerCase().includes(normalized),
       )
-      .filter(
-        // "Needs attention" = a workflow step was skipped (an earlier step is undone while a
-        // later one is done) — the throughput signal for "no steps missed".
-        (record) => !attentionOnly || (workflowStateByKey.get(record.key) ?? []).some((state) => state.gap),
-      )
       .sort((a, b) => {
         if (sortMode === 'casenum') {
           return caseNumberSortValue(b) - caseNumberSortValue(a) || a.name.localeCompare(b.name);
@@ -3615,13 +3609,13 @@ export default function BoardPage() {
         }
         return a.name.localeCompare(b.name);
       });
-  }, [activeView, caseRecords, search, sortMode, attentionOnly, workflowStateByKey, statusOverrides, milestoneOverrides, contactOverrides]);
+  }, [activeView, caseRecords, search, sortMode, workflowStateByKey, statusOverrides, milestoneOverrides, contactOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, recordLimit), [matchingRecords, recordLimit]);
   // Reset the visible window whenever the filtered/sorted set changes, so "Show more" never
   // leaves a stale large window applied to a freshly narrowed view.
   useEffect(() => {
     setRecordLimit(visibleRecordLimit);
-  }, [activeView, search, sortMode, attentionOnly, registerFilter]);
+  }, [activeView, search, sortMode, registerFilter]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const visibleSummary = operationsLoading
     ? 'Loading dashboard records'
@@ -3736,30 +3730,6 @@ export default function BoardPage() {
                 ))}
               </select>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setAttentionOnly((on) => !on)}
-              aria-pressed={attentionOnly}
-              title="Show only cases with a skipped workflow step"
-              className={`hidden h-8 rounded-md border px-2.5 text-xs font-bold transition sm:block ${
-                attentionOnly
-                  ? 'border-amber-300 bg-amber-50 text-amber-800'
-                  : 'border-neutral-200 bg-neutral-50 text-neutral-600 hover:bg-neutral-100'
-              }`}
-            >
-              Needs attention
-            </button>
-            <select
-              value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as 'name' | 'recent' | 'count' | 'casenum')}
-              className="hidden h-8 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs font-semibold text-neutral-700 outline-none focus:border-[#efb70c] sm:block"
-              aria-label="Sort families"
-            >
-              <option value="casenum">Sort: Case # (new→old)</option>
-              <option value="name">Sort: Name A–Z</option>
-              <option value="recent">Sort: Recently updated</option>
-              <option value="count">Sort: Most records</option>
-            </select>
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}

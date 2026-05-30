@@ -246,31 +246,47 @@ async function getDashboardMetrics() {
   const sql = getSql();
   const now = new Date();
   const year = now.getFullYear();
-  const monthStart = new Date(year, now.getMonth(), 1).toISOString().slice(0, 10);
-  const nextMonthStart = new Date(year, now.getMonth() + 1, 1).toISOString().slice(0, 10);
+  const monthKey = new Date(year, now.getMonth(), 1).toISOString().slice(0, 7); // 'YYYY-MM'
   const monthLabel = now.toLocaleString('en-US', { month: 'short', year: 'numeric' });
   const canonicalKey = canonicalCaseKeySql();
 
-  // Header tickers are intentionally locked:
-  // - Cases this year = distinct canonical case groups with resolver case_year == current year.
-  // - Cases this month = distinct canonical case groups with a real operational business_date in
-  //   the current month. This is an activity-date metric, not a legal DOD count, until a verified
-  //   DOD/first-call source exists. Do not derive monthly cases from Golden Gate's YY-NNN refs:
-  //   those refs encode year only and are per-register, not global case IDs.
+  // One case = one canonical group (name + death-year). Counts are deduped to that key and refined so
+  // the tickers reflect REAL Golden Gate family cases:
+  //  - countable: a group with a case number OR any non-cremains footprint. This drops the ~79 numberless
+  //    cremains-only groups, which are MoKan crematory jobs for OTHER funeral homes, not GG family cases.
+  //  - Cases this year  = countable groups whose resolver case_year == current year.
+  //  - Cases this month = countable groups whose effective month == current month, where effective month
+  //    is the date of death when known (the true case month) and otherwise the first business_date we saw
+  //    for the case. This replaces the old any-activity-this-month count, which double-counted older cases
+  //    that merely had a service/cremation date land in the current month.
   const rows = await sql(
-    `SELECT
-       COUNT(DISTINCT ${canonicalKey}) FILTER (
-         WHERE source_payload->>'case_year' = $1
-       )::int AS cases_this_year,
-       COUNT(DISTINCT ${canonicalKey}) FILTER (
-         WHERE business_date >= $2::date
-           AND business_date < $3::date
-       )::int AS cases_this_month
-     FROM operational_items
-     WHERE source_origin = 'google-sheet'
-       AND is_archived = false
-       AND ${canonicalKey} IS NOT NULL`,
-    [String(year), monthStart, nextMonthStart],
+    `WITH g AS (
+       SELECT ${canonicalKey} AS gk,
+              max(source_payload->>'case_year') AS yr,
+              max(nullif(source_case_number,'')) AS any_cn,
+              bool_or(area <> 'cremains') AS has_non_cremains,
+              max(nullif(date_of_death,'')) AS dod,
+              min(business_date) FILTER (WHERE business_date IS NOT NULL) AS first_seen
+       FROM operational_items
+       WHERE is_archived = false
+         AND source_origin IN ('google-sheet','ggfuneralos')
+         AND ${canonicalKey} IS NOT NULL
+       GROUP BY 1
+     ),
+     countable AS (
+       SELECT yr,
+              COALESCE(
+                CASE WHEN dod ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substr(dod,1,7) END,
+                to_char(first_seen,'YYYY-MM')
+              ) AS eff_month
+       FROM g
+       WHERE any_cn IS NOT NULL OR has_non_cremains
+     )
+     SELECT
+       count(*) FILTER (WHERE yr = $1)::int        AS cases_this_year,
+       count(*) FILTER (WHERE eff_month = $2)::int  AS cases_this_month
+     FROM countable`,
+    [String(year), monthKey],
   );
 
   return {
@@ -279,8 +295,8 @@ async function getDashboardMetrics() {
     month_label: monthLabel,
     year,
     basis: {
-      cases_this_month: 'Distinct canonical case groups with business_date in the current month; activity-date based, not DOD based.',
-      cases_this_year: 'Distinct canonical case groups with resolver case_year equal to the current year.',
+      cases_this_month: 'Distinct GG family cases (numberless cremains-for-other-homes excluded) whose date of death — or first seen date when DOD is unknown — falls in the current month.',
+      cases_this_year: 'Distinct GG family cases (numberless cremains-for-other-homes excluded) with resolver case_year equal to the current year.',
     },
   };
 }
