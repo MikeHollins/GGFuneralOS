@@ -642,6 +642,18 @@ function caseNumberSortValue(record: CaseRecord) {
   return best;
 }
 
+// One stable, canonical Golden Gate ref to display per case: the lowest NN-NNN whose year matches
+// the case's death-year (falling back to the lowest overall). Deterministic so it does NOT change
+// when opening a case loads more of its rows (a case legitimately spans 2 registers, e.g. death-cert
+// + crematory; the grid shows one canonical number, the drawer can show all).
+function primaryCaseRef(record: CaseRecord): string {
+  const refs = record.sourceCaseNumbers.filter((r) => /^\d{2}-\d{3,4}$/.test(r));
+  if (!refs.length) return record.sourceCaseNumbers[0] ?? '';
+  const year = (record.key.split('|')[1] ?? '').slice(2);
+  const yearMatch = year ? refs.filter((r) => r.startsWith(`${year}-`)) : [];
+  return (yearMatch.length ? yearMatch : refs).slice().sort()[0];
+}
+
 function caseKeyForItem(item: DashboardItem) {
   const payload = sourcePayload(item);
   // Canonical case identity = name + death-year, resolved in the sync (master-sheet-sync.ts).
@@ -2377,7 +2389,7 @@ function DeceasedCell({
     (hasCandidate
       ? [record.contactCandidates[0].relationship, record.contactCandidates[0].phone, record.contactCandidates[0].email].filter(Boolean).join(' · ')
       : [
-          record.sourceCaseNumbers[0] ? `GG ref ${record.sourceCaseNumbers[0]}` : '',
+          primaryCaseRef(record) ? `GG ref ${primaryCaseRef(record)}` : '',
           record.mediaMatches.length ? `${record.mediaMatches.length} media match${record.mediaMatches.length === 1 ? '' : 'es'}` : '',
           record.primaryItem.source,
         ].filter(Boolean).join(' · '));
@@ -2965,9 +2977,7 @@ function DetailDrawer({
                     className="rounded border border-neutral-200 px-1.5 py-0.5 font-mono text-[11px] text-neutral-600"
                     title="Golden Gate per-register case number (not a global ID)"
                   >
-                    {record.sourceCaseNumbers.length > 1
-                      ? `GG ref ${record.sourceCaseNumbers[0]} +${record.sourceCaseNumbers.length - 1}`
-                      : `GG ref ${record.sourceCaseNumbers[0]}`}
+                    GG ref {primaryCaseRef(record)}
                   </span>
                 )}
                 {record.identityStatus === 'unverified' && (
@@ -3761,10 +3771,9 @@ export default function BoardPage() {
                 aria-label={`Open details for ${record.name}`}
               >
                 <div className="flex items-center px-2 py-1.5 font-mono text-[11px] text-neutral-500 max-lg:hidden">
-                  {record.sourceCaseNumbers[0] ? (
+                  {primaryCaseRef(record) ? (
                     <span title="Golden Gate per-register reference (not a global ID)">
-                      {record.sourceCaseNumbers[0]}
-                      {record.sourceCaseNumbers.length > 1 ? ` +${record.sourceCaseNumbers.length - 1}` : ''}
+                      {primaryCaseRef(record)}
                     </span>
                   ) : record.items.some((item) => item.source === 'First Call') ? (
                     <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-bold uppercase text-amber-800">New</span>
