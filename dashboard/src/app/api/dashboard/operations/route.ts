@@ -218,6 +218,40 @@ async function getItems({
   ]);
 
   const items = rows.map(toDashboardItem);
+
+  // A case's cremation #, MoKan #, and DC # live on rows from DIFFERENT registers (Crematory Log vs
+  // Death Certificate), and the board feed does NOT load every register's row per case — so deriving
+  // them from the loaded rows alone misses the DC number for most cases. Compute them once across the
+  // FULL table for the case groups in this result and stamp them onto every item, so the client sees
+  // the complete set no matter which rows happened to load.
+  const canonicalKey = canonicalCaseKeySql();
+  const groupKeys = Array.from(
+    new Set(items.map((it) => (it.sourcePayload?.case_group_key || it.sourcePayload?.case_match_key || '') as string).filter(Boolean)),
+  );
+  if (groupKeys.length) {
+    const refsRows = (await sql(
+      `SELECT ${canonicalKey} AS gk,
+              max(source_case_number) FILTER (WHERE source ILIKE '%cremat%' AND source_case_number ~ '^\\d{2}-\\d+$') AS cremation_number,
+              max(source_case_number) FILTER (WHERE source ILIKE '%death cert%' AND source_case_number ~ '^\\d{2}-\\d+$') AS dc_number,
+              max(source_payload->>'mokan') FILTER (WHERE source ILIKE '%cremat%' AND NULLIF(source_payload->>'mokan','') IS NOT NULL) AS mokan_number
+       FROM operational_items
+       WHERE is_archived = false AND ${canonicalKey} = ANY($1::text[])
+       GROUP BY 1`,
+      [groupKeys],
+    )) as Array<{ gk: string; cremation_number: string | null; dc_number: string | null; mokan_number: string | null }>;
+    const refsByGroup = new Map(refsRows.map((r) => [r.gk, r]));
+    for (const it of items) {
+      const gk = (it.sourcePayload?.case_group_key || it.sourcePayload?.case_match_key || '') as string;
+      const refs = gk ? refsByGroup.get(gk) : undefined;
+      it.sourcePayload = {
+        ...it.sourcePayload,
+        cremation_number: refs?.cremation_number ?? '',
+        dc_number: refs?.dc_number ?? '',
+        mokan_number: refs?.mokan_number ?? '',
+      };
+    }
+  }
+
   const total = totalRows[0]?.count ?? items.length;
   return {
     items,

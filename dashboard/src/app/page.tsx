@@ -2430,6 +2430,15 @@ function CalendarBoard({
 // These come in via the 15-min master-sheet sync (Golden Gate's logs are the source of truth), so a
 // staff override (see identityRefOverrides) wins when present, else the live source value shows.
 function caseRefsFromSource(record: CaseRecord): { cremation: string; mokan: string; dc: string } {
+  // The operations API stamps each item with the case-complete numbers (computed across ALL the
+  // case's rows, since the board feed doesn't load every register's row). Prefer those when present.
+  for (const item of record.items) {
+    const p = sourcePayload(item);
+    if ('cremation_number' in p || 'dc_number' in p || 'mokan_number' in p) {
+      return { cremation: cleanDisplay(p.cremation_number), mokan: cleanDisplay(p.mokan_number), dc: cleanDisplay(p.dc_number) };
+    }
+  }
+  // Fallback: scan the loaded rows directly (older cached payloads / other origins).
   let cremation = '';
   let mokan = '';
   let dc = '';
