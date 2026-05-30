@@ -280,7 +280,12 @@ async function getDashboardMetrics() {
                 to_char(first_seen,'YYYY-MM')
               ) AS eff_month
        FROM g
-       WHERE any_cn IS NOT NULL OR has_non_cremains
+       WHERE (any_cn IS NOT NULL OR has_non_cremains)
+         -- Exclude empty pre-numbered crematory-log rows. Golden Gate's crematory sheet pre-fills
+         -- ~1,000+ rows with a case number + a running mokan counter but NO deceased name or any
+         -- other data; the resolver falls those back to a name == the case number ("26 906"). They
+         -- are placeholders, not cases, so a numeric-only name is dropped from the count.
+         AND split_part(gk,'|',1) !~ '^\\d+(\\s+\\d+)*$'
      )
      SELECT
        count(*) FILTER (WHERE yr = $1)::int        AS cases_this_year,
@@ -295,8 +300,8 @@ async function getDashboardMetrics() {
     month_label: monthLabel,
     year,
     basis: {
-      cases_this_month: 'Distinct GG family cases (numberless cremains-for-other-homes excluded) whose date of death — or first seen date when DOD is unknown — falls in the current month.',
-      cases_this_year: 'Distinct GG family cases (numberless cremains-for-other-homes excluded) with resolver case_year equal to the current year.',
+      cases_this_month: 'Distinct named GG family cases (numberless cremains-for-other-homes and empty pre-numbered crematory rows excluded) whose date of death — or first seen date when DOD is unknown — falls in the current month.',
+      cases_this_year: 'Distinct named GG family cases (numberless cremains-for-other-homes and empty pre-numbered crematory rows excluded) with resolver case_year equal to the current year.',
     },
   };
 }
