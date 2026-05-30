@@ -38,11 +38,16 @@ async function fetchAllObits(): Promise<Obit[]> {
   let page = 1;
   let lastPage = 1;
   do {
-    const res = await fetch(`${TUKIOS_BASE}/obituaries?siteAlias=${SITE_ALIAS}&per_page=100&page=${page}`, {
-      headers: { Authorization: `Bearer ${TUKIOS_TOKEN}` },
-    });
-    if (!res.ok) break;
-    const json: any = await res.json();
+    let json: any = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const res = await fetch(`${TUKIOS_BASE}/obituaries?siteAlias=${SITE_ALIAS}&per_page=100&page=${page}`, {
+        headers: { Authorization: `Bearer ${TUKIOS_TOKEN}` },
+      });
+      if (res.ok) { json = await res.json(); break; }
+      // Never silently truncate: retry a transient failure, then throw so the cron reports a failed
+      // run (and retries next cycle) instead of treating a partial fetch as a complete sync.
+      if (attempt === 3) throw new Error(`Tukios obituaries page ${page} failed after ${attempt} attempts: HTTP ${res.status}`);
+    }
     lastPage = Number(json.last_page) || 1;
     for (const o of json.data ?? []) out.push(o);
     page += 1;
@@ -70,7 +75,7 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
 
   const obits = await fetchAllObits();
   const stats = { obits: obits.length, matchedCases: 0, recoveredSuffix: 0, filledDod: 0, filledDob: 0, unmatched: 0, applied: 0 };
-  const updates: Array<{ item_id: string; dod: string | null; dob: string | null; ef: Record<string, boolean> }> = [];
+  const updates: Array<{ item_id: string; dod: string | null; dob: string | null }> = [];
 
   for (const o of obits) {
     const dod = (o.date_of_death ?? '').trim();
@@ -103,10 +108,12 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
       const newDod = !c.dod ? dod : null;
       const newDob = !c.dob && dob ? dob : null;
       if (!newDod && !newDob) continue;
-      const ef: Record<string, boolean> = {};
-      if (newDod) { ef.date_of_death = true; stats.filledDod++; }
-      if (newDob) { ef.date_of_birth = true; stats.filledDob++; }
-      updates.push({ item_id: c.item_id, dod: newDod, dob: newDob, ef });
+      // NOTE: we do NOT mark edited_fields here. This is automated enrichment, not a staff edit — it
+      // must yield to a real upstream value if Golden Gate ever adds DOB/DOD to their sheet. The fill
+      // survives empty-sheet re-syncs via the sync's keep-existing-when-incoming-empty rule.
+      if (newDod) stats.filledDod++;
+      if (newDob) stats.filledDob++;
+      updates.push({ item_id: c.item_id, dod: newDod, dob: newDob });
     }
   }
 
@@ -119,9 +126,8 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
         `UPDATE operational_items o
          SET date_of_death = coalesce(u.dod, o.date_of_death),
              date_of_birth = coalesce(u.dob, o.date_of_birth),
-             edited_fields = o.edited_fields || u.ef,
              updated_at = now()
-         FROM jsonb_to_recordset($1::jsonb) AS u(item_id text, dod text, dob text, ef jsonb)
+         FROM jsonb_to_recordset($1::jsonb) AS u(item_id text, dod text, dob text)
          WHERE o.item_id = u.item_id`,
         [JSON.stringify(chunk)],
       );

@@ -1203,8 +1203,19 @@ async function bulkUpsertItems(rows: ImportRow[]) {
          source_payload = EXCLUDED.source_payload,
          source_seen_at = now(),
          source_content_hash = EXCLUDED.source_content_hash,
-         date_of_birth = CASE WHEN operational_items.edited_fields ? 'date_of_birth' THEN operational_items.date_of_birth ELSE EXCLUDED.date_of_birth END,
-         date_of_death = CASE WHEN operational_items.edited_fields ? 'date_of_death' THEN operational_items.date_of_death ELSE EXCLUDED.date_of_death END,
+         -- Provenance order for DOB/DOD: (1) a staff edit is authoritative and never overwritten;
+         -- (2) a real value from the sheet wins next (so if Golden Gate ever adds a DOB/DOD column it
+         -- supersedes our enrichment); (3) otherwise KEEP what we already have — never wipe on an empty
+         -- incoming value, which is what preserves obituary/contract enrichment across re-syncs without
+         -- it having to pose as a staff edit.
+         date_of_birth = CASE
+           WHEN operational_items.edited_fields ? 'date_of_birth' THEN operational_items.date_of_birth
+           WHEN NULLIF(EXCLUDED.date_of_birth, '') IS NOT NULL THEN EXCLUDED.date_of_birth
+           ELSE operational_items.date_of_birth END,
+         date_of_death = CASE
+           WHEN operational_items.edited_fields ? 'date_of_death' THEN operational_items.date_of_death
+           WHEN NULLIF(EXCLUDED.date_of_death, '') IS NOT NULL THEN EXCLUDED.date_of_death
+           ELSE operational_items.date_of_death END,
          source_case_number = EXCLUDED.source_case_number,
          business_date = EXCLUDED.business_date,
          is_archived = false,
