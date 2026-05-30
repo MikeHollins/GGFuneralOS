@@ -48,6 +48,15 @@ Full output: `tasks/wr9g1wq4j.output`. Highlights:
 
 **Plan status:** DONE = identity layer (resolver + grouping + date-bridge), verified metrics, source landscape. READY-TO-BUILD (our-side-only) = data-quality flag, identity-quality UI, viewing-parity (sort/pagination/per-register/filters), create/edit-in-Neon, obituary read-only cross-check. GATED (director review + sandbox) = all family-facing (Twilio/SMS/email/auto-publish), sheet write-back, Drive ingestion (needs correct account).
 
+## First-call intake (create-case) — COMPLETE 2026-05-30 (verified, pushed)
+
+The dashboard can now ORIGINATE a case (the migration beachhead), not just mirror the sheet.
+- **`lib/case-identity.ts`** (`9c64482`): canonical name+death-year key shared by the sync and intake (§13).
+- **`first_call_intake` table** (migration `017`): system-of-record for the intake event; `date_of_death` + `nok_name` NOT NULL (fail-closed).
+- **`POST /api/dashboard/first-call`** (`de7ab9b`): validates (last name, DOD, NOK, initials), writes the intake row + a board row (`operational_items`, `source='First Call'`, `source_origin='ggfuneralos'`, DOD set → MoEVR clock starts) + NOK (`case_contact_state`) + first-call step done (`case_workflow_state`). Threads with later sheet rows by name+death-year.
+- **UI** (`bf442cd`/`d3a6be4`/`dc5ca50`): red **"+ New First Call"** top button → 7-section drawer; **"Recent First Calls"** top view (cases with a `source='First Call'` item in last 72h); **Case #** column left of Deceased (GG ref, or amber "New" for un-numbered first-call cases). First-call detection keys on the explicit `source='First Call'` (durable, not the default origin).
+- Verified end-to-end via Playwright (create → appears in Recent First Calls with New badge); all QA fixtures deleted. No family-facing sends; read-only on their side.
+
 ## Viewing parity — COMPLETE 2026-05-29/30 (all dashboard-only, verified, pushed)
 
 - **Sort** (`d903029`): Name / Recently updated / Most records (was hard-coded alphabetical).
