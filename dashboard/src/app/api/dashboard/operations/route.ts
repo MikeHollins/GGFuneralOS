@@ -41,6 +41,7 @@ function toDashboardItem(row: any): DashboardItem {
     dateOfBirth: row.date_of_birth ?? null,
     dateOfDeath: row.date_of_death ?? null,
     sourceCaseNumber: row.source_case_number ?? null,
+    sourceOrigin: row.source_origin ?? '',
     createdAt: row.created_at,
     status: row.status_default,
     priority: row.priority,
@@ -159,7 +160,7 @@ function itemFilters({ query = '', caseKey = '', source = '' }: ItemQuery) {
 }
 
 const ITEM_COLUMNS =
-  'item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_birth, date_of_death, source_case_number, created_at, status_default, priority, options';
+  'item_id, area, label, detail, owner, due_text, source, source_ref, source_payload, date_of_birth, date_of_death, source_case_number, source_origin, created_at, status_default, priority, options';
 // Most-recent rows kept PER AREA so no area is ever dropped by a global cap — death-cert,
 // belongings, and service have no parseable business_date, so a flat recency sort would
 // bury them last and truncate them. Per-area top-N guarantees every area is represented.

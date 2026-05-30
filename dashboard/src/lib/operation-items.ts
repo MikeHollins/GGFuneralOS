@@ -21,6 +21,7 @@ export type DashboardItem = {
   dateOfBirth?: string | null;
   dateOfDeath?: string | null;
   sourceCaseNumber?: string | null;
+  sourceOrigin?: string;
   createdAt?: string;
   status: string;
   priority: 'critical' | 'high' | 'normal' | 'done';

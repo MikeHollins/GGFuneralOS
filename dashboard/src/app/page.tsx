@@ -56,7 +56,7 @@ type StatusOverride = {
 
 type SourceHealth = OperationsFeed['sources'][number];
 type FeedMeta = NonNullable<OperationsFeed['meta']>;
-type ViewId = 'active' | 'cases' | 'calendar' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
+type ViewId = 'active' | 'cases' | 'recent-first-calls' | 'calendar' | 'service' | 'arrangements' | 'death-certs' | 'cremains' | 'belongings' | 'files';
 type EditableItemField = 'label' | 'detail' | 'owner' | 'due' | 'date_of_birth' | 'date_of_death';
 
 type MenuEntry = {
@@ -154,6 +154,7 @@ type WorkflowStepState = {
 const viewLabels: Record<ViewId, string> = {
   active: 'Active Cases',
   cases: 'All Cases',
+  'recent-first-calls': 'Recent First Calls',
   calendar: 'Calendar',
   service: 'Service',
   arrangements: 'Arrangements',
@@ -164,7 +165,7 @@ const viewLabels: Record<ViewId, string> = {
 };
 
 // Primary navigation answers "which set of families do I look at?" — kept as buttons.
-const primaryViews: ViewId[] = ['active', 'cases', 'calendar'];
+const primaryViews: ViewId[] = ['active', 'cases', 'recent-first-calls', 'calendar'];
 const appTopLinks = [
   { href: '/staff', label: 'Staff/Admin', ready: true },
   { href: '/texts', label: 'Texts', ready: false },
@@ -258,6 +259,7 @@ const serviceLogisticsGroups: Array<{ label: string; keys: string[] }> = [
 const viewAreaFilters: Record<ViewId, Array<OperationArea | 'smb'> | null> = {
   active: null,
   cases: null,
+  'recent-first-calls': null,
   calendar: null,
   service: ['service'],
   arrangements: ['arrangement'],
@@ -1666,6 +1668,14 @@ function recordMatchesView(record: CaseRecord, view: ViewId, statusOverrides: Re
   if (view === 'active') return recordIsActive(record);
   if (view === 'cases') return true;
   if (view === 'calendar') return true;
+  if (view === 'recent-first-calls') {
+    // Cases we originated via the New First Call drawer in the last 72 hours. First-call rows are
+    // tagged source_origin='ggfuneralos'; createdAt is when the intake was recorded.
+    const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+    return record.items.some(
+      (item) => item.sourceOrigin === 'ggfuneralos' && item.createdAt != null && new Date(item.createdAt).getTime() >= cutoff,
+    );
+  }
   const filters = viewAreaFilters[view];
   if (!filters) return true;
   return record.items.some((item) => filters.includes(item.area) || (filters.includes('smb') && item.source.startsWith('SMB:')));
@@ -3679,7 +3689,8 @@ export default function BoardPage() {
           <CalendarBoard records={caseRecords} milestoneOverrides={milestoneOverrides} onOpenCase={setSelectedKey} />
         ) : (
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
+          <div className="grid grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
+            <div className="px-2 py-2">Case #</div>
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
@@ -3707,9 +3718,21 @@ export default function BoardPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                className="grid w-full cursor-pointer grid-cols-[minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
+                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
                 aria-label={`Open details for ${record.name}`}
               >
+                <div className="flex items-center px-2 py-1.5 font-mono text-[11px] text-neutral-500 max-lg:hidden">
+                  {record.sourceCaseNumbers[0] ? (
+                    <span title="Golden Gate per-register reference (not a global ID)">
+                      {record.sourceCaseNumbers[0]}
+                      {record.sourceCaseNumbers.length > 1 ? ` +${record.sourceCaseNumbers.length - 1}` : ''}
+                    </span>
+                  ) : record.items.some((item) => item.sourceOrigin === 'ggfuneralos') ? (
+                    <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-bold uppercase text-amber-800">New</span>
+                  ) : (
+                    <span className="text-neutral-300">—</span>
+                  )}
+                </div>
                 <DeceasedCell record={record} contactOverrides={contactOverrides} onOpen={() => setSelectedKey(record.key)} />
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
