@@ -1132,7 +1132,7 @@ function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overr
     <div
       onClick={(event) => { event.stopPropagation(); onOpen(); }}
       title="Open case to edit dates & locations"
-      className="grid w-full grid-cols-1 gap-1 px-1 py-1 text-[10px] leading-tight 2xl:grid-cols-2"
+      className="grid w-full grid-cols-2 gap-1 px-1 py-1 text-[10px] leading-tight"
     >
       {SCHEDULE_EVENTS.map((ev) => {
         const dateState = effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.dateKey)!, overrides);
