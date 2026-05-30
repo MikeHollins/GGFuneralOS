@@ -1114,6 +1114,53 @@ function MilestoneChips({
   );
 }
 
+// One bubble per funeral event, each combining that event's DATE and LOCATION so the whole picture
+// for "Service" / "Cremation" / "Burial" reads at a glance. "…" = not yet decided, "N/A" = the
+// disposition the family didn't choose. Replaces the separate Date/Time and Location columns.
+const SCHEDULE_EVENTS: Array<{ label: string; dateKey: string; locationKey?: string }> = [
+  { label: 'First call', dateKey: 'first_call' },
+  { label: 'Service', dateKey: 'service', locationKey: 'service_location' },
+  { label: 'Cremation', dateKey: 'cremation', locationKey: 'cremation_location' },
+  { label: 'Burial', dateKey: 'burial', locationKey: 'burial_location' },
+];
+const SCHEDULE_DEF_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
+
+function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overrides: MilestoneOverrideMap; onOpen: () => void }) {
+  const show = (s: MilestoneState) => (s.state === 'empty' ? '…' : s.state === 'na' ? 'N/A' : s.value);
+  const filled = (s: MilestoneState) => s.state === 'set' || s.state === 'source';
+  return (
+    <div
+      onClick={(event) => { event.stopPropagation(); onOpen(); }}
+      title="Open case to edit dates & locations"
+      className="grid w-full grid-cols-1 gap-1 px-1 py-1 text-[10px] leading-tight 2xl:grid-cols-2"
+    >
+      {SCHEDULE_EVENTS.map((ev) => {
+        const dateState = effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.dateKey)!, overrides);
+        const locState = ev.locationKey ? effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.locationKey)!, overrides) : null;
+        const anyFilled = filled(dateState) || (locState ? filled(locState) : false);
+        const anyNa = dateState.state === 'na' || locState?.state === 'na';
+        const overridden = dateState.overridden || Boolean(locState?.overridden);
+        const tone = anyFilled
+          ? overridden
+            ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950'
+            : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          : anyNa
+            ? 'border-neutral-200 bg-neutral-50 text-neutral-500'
+            : 'border-neutral-200 bg-neutral-50 text-neutral-400';
+        return (
+          <div key={ev.label} className={`min-w-0 rounded-md border px-1.5 py-1 ${tone}`}>
+            <div className="truncate text-[9px] font-bold uppercase tracking-wide opacity-70">{ev.label}</div>
+            <div className={`truncate font-semibold ${filled(dateState) ? '' : 'italic opacity-80'}`}>{show(dateState)}</div>
+            {ev.locationKey ? (
+              <div className={`truncate ${locState && filled(locState) ? '' : 'italic opacity-70'}`}>{show(locState!)}</div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type CommitMilestone = (record: CaseRecord, def: MilestoneDef, value: string, isNa: boolean, initials: string) => Promise<void>;
 
 // One editable milestone field in the drawer: shows source default + staff override, with
@@ -3786,11 +3833,10 @@ export default function BoardPage() {
           <CalendarBoard records={caseRecords} milestoneOverrides={milestoneOverrides} onOpenCase={setSelectedKey} />
         ) : (
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <div className="grid grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
+          <div className="grid grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
             <div className="px-2 py-2">GG Case Number</div>
             <div className="px-2 py-2">Deceased</div>
-            <div className="px-2 py-2">Date / Time</div>
-            <div className="px-2 py-2">Location</div>
+            <div className="px-2 py-2">Schedule &amp; Location</div>
             <div className="px-2 py-2">Status</div>
           </div>
 
@@ -3815,7 +3861,7 @@ export default function BoardPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
+                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
                 aria-label={`Open details for ${record.name}`}
               >
                 <div className="flex items-center px-2 py-1.5 font-mono text-[11px] text-neutral-500 max-lg:hidden">
@@ -3831,10 +3877,7 @@ export default function BoardPage() {
                 </div>
                 <DeceasedCell record={record} identityRefOverrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 <div className="px-1 py-1.5">
-                  <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
-                </div>
-                <div className="px-1 py-1.5">
-                  <MilestoneChips record={record} defs={LOCATION_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                  <ScheduleCell record={record} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>
                 <WorkflowProgressCell
                   record={record}
