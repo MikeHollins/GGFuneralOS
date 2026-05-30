@@ -56,6 +56,7 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
 
   const obits = await fetchAllObits();
   const stats = { obits: obits.length, matchedCases: 0, filledDod: 0, filledDob: 0, unmatched: 0, applied: 0 };
+  const updates: Array<{ item_id: string; dod: string | null; dob: string | null; ef: Record<string, boolean> }> = [];
 
   for (const o of obits) {
     const dod = (o.date_of_death ?? '').trim();
@@ -76,22 +77,28 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
       const newDob = !c.dob && dob ? dob : null;
       if (!newDod && !newDob) continue;
       const ef: Record<string, boolean> = {};
-      if (newDod) ef.date_of_death = true;
-      if (newDob) ef.date_of_birth = true;
-      if (apply) {
-        await sql(
-          `UPDATE operational_items
-           SET date_of_death = coalesce($2, date_of_death),
-               date_of_birth = coalesce($3, date_of_birth),
-               edited_fields = edited_fields || $4::jsonb,
-               updated_at = now()
-           WHERE item_id = $1`,
-          [c.item_id, newDod, newDob, JSON.stringify(ef)],
-        );
-        stats.applied++;
-      }
-      if (newDod) stats.filledDod++;
-      if (newDob) stats.filledDob++;
+      if (newDod) { ef.date_of_death = true; stats.filledDod++; }
+      if (newDob) { ef.date_of_birth = true; stats.filledDob++; }
+      updates.push({ item_id: c.item_id, dod: newDod, dob: newDob, ef });
+    }
+  }
+
+  // Bulk-apply in chunks so thousands of fills run in ~tens of statements (not one per row, which
+  // timed out the serverless function). coalesce() keeps any existing value (fill-only-empty).
+  if (apply) {
+    for (let i = 0; i < updates.length; i += 500) {
+      const chunk = updates.slice(i, i + 500);
+      await sql(
+        `UPDATE operational_items o
+         SET date_of_death = coalesce(u.dod, o.date_of_death),
+             date_of_birth = coalesce(u.dob, o.date_of_birth),
+             edited_fields = o.edited_fields || u.ef,
+             updated_at = now()
+         FROM jsonb_to_recordset($1::jsonb) AS u(item_id text, dod text, dob text, ef jsonb)
+         WHERE o.item_id = u.item_id`,
+        [JSON.stringify(chunk)],
+      );
+      stats.applied += chunk.length;
     }
   }
   return stats;
