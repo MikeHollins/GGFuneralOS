@@ -3785,7 +3785,7 @@ export default function BoardPage() {
         ) : (
         <section className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
           <div className="grid grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(160px,1fr)_minmax(150px,1fr)_minmax(300px,1.8fr)] border-b border-neutral-200 bg-neutral-50 text-center text-[11px] font-bold uppercase tracking-wide text-neutral-500 max-lg:hidden">
-            <div className="px-2 py-2">Case #</div>
+            <div className="px-2 py-2">GG Case Number</div>
             <div className="px-2 py-2">Deceased</div>
             <div className="px-2 py-2">Date / Time</div>
             <div className="px-2 py-2">Location</div>
