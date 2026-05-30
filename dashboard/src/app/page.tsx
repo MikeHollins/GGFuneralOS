@@ -1016,6 +1016,18 @@ function sourceMilestoneValue(record: CaseRecord, def: MilestoneDef) {
 }
 
 // Effective milestone = staff override (value or N/A) ?? source-derived default ?? empty.
+// Disposition from what we have: a case in the Crematory/Cremains logs is a cremation; a case with
+// any burial/cemetery value is a burial. Families generally do one or the other, so the opposite
+// disposition's empty date/location slots are shown N/A (derived, still overridable) — no clutter.
+function caseDisposition(record: CaseRecord): 'cremation' | 'burial' | null {
+  if (record.items.some((i) => i.area === 'cremains' || i.area === 'crematory')) return 'cremation';
+  const hasBurial = record.items.some((i) => {
+    const p = sourcePayload(i);
+    return ['committal_date', 'burial_date', 'cemetery', 'cemetery_name', 'committal_location'].some((k) => cleanDisplay(p[k]));
+  });
+  return hasBurial ? 'burial' : null;
+}
+
 function effectiveMilestone(record: CaseRecord, def: MilestoneDef, overrides: MilestoneOverrideMap): MilestoneState {
   const override = overrides[record.key]?.[def.key];
   if (override) {
@@ -1024,6 +1036,10 @@ function effectiveMilestone(record: CaseRecord, def: MilestoneDef, overrides: Mi
   }
   const source = sourceMilestoneValue(record, def);
   if (source) return { def, state: 'source', value: source, overridden: false };
+  // Derived N/A for the disposition the family didn't choose (cremation ⇄ burial are exclusive).
+  const disposition = caseDisposition(record);
+  if (disposition === 'cremation' && (def.key === 'burial' || def.key === 'burial_location')) return { def, state: 'na', value: '', overridden: false };
+  if (disposition === 'burial' && (def.key === 'cremation' || def.key === 'cremation_location')) return { def, state: 'na', value: '', overridden: false };
   return { def, state: 'empty', value: '', overridden: false };
 }
 
