@@ -56,6 +56,12 @@ export const getOperationsFeed = (params?: { q?: string; caseKey?: string; limit
   return apiFetch<OperationsFeed>(`/dashboard/operations${query ? `?${query}` : ''}`);
 };
 
+export const createFirstCall = (payload: Record<string, unknown>) =>
+  apiFetch<{ data: { case_key: string; item_id: string; name: string; date_of_death: string } }>(
+    '/dashboard/first-call',
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
+
 export const updateOperationItem = (itemId: string, field: string, value: string) =>
   apiFetch<{ data: OperationsFeed['items'][number]; audit: OperationalItemAudit | null; changed: boolean }>(
     `/dashboard/operations/${encodeURIComponent(itemId)}`,

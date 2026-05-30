@@ -20,6 +20,7 @@ import {
   type OperationsFeed,
 } from '@/lib/api';
 import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
+import { FirstCallDrawer } from './first-call-drawer';
 
 type AuditEntry = {
   kind: 'status' | 'edit' | 'workflow' | 'milestone' | 'contact';
@@ -3060,6 +3061,7 @@ export default function BoardPage() {
   const [sheetSyncMessage, setSheetSyncMessage] = useState('');
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [firstCallOpen, setFirstCallOpen] = useState(false);
   const operationsRequestRef = useRef(0);
   const detailFetchedKeysRef = useRef<Set<string>>(new Set());
   const detailRequestRef = useRef(0);
@@ -3596,6 +3598,14 @@ export default function BoardPage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setFirstCallOpen(true)}
+              className="h-8 rounded-md bg-red-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-red-700"
+            >
+              + New First Call
+            </button>
+            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
             {primaryViews.map((view) => (
               <button
                 key={view}
@@ -3770,6 +3780,19 @@ export default function BoardPage() {
         </section>
         )}
       </main>
+
+      {firstCallOpen ? (
+        <FirstCallDrawer
+          onClose={() => setFirstCallOpen(false)}
+          onCreated={(created) => {
+            setFirstCallOpen(false);
+            setSearch('');
+            setActiveView('recent-first-calls');
+            loadOperationsFeed({ query: '' });
+            setSelectedKey(created.case_key);
+          }}
+        />
+      ) : null}
 
       <DetailDrawer
         record={selectedRecord}
