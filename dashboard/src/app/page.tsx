@@ -165,8 +165,10 @@ const viewLabels: Record<ViewId, string> = {
   files: 'Production',
 };
 
-// Primary navigation answers "which set of families do I look at?" — kept as buttons.
-const primaryViews: ViewId[] = ['active', 'cases', 'recent-first-calls', 'calendar'];
+// Primary navigation. The default landing is the case list (reached via the title/home); the only
+// view buttons are Recent First Calls and Calendar. Active/All-cases toggles and the register filter
+// are removed — the search box spans every case instead.
+const primaryViews: ViewId[] = ['recent-first-calls', 'calendar'];
 const appTopLinks = [
   { href: '/staff', label: 'Staff/Admin', ready: true },
   { href: '/texts', label: 'Texts', ready: false },
@@ -3724,7 +3726,9 @@ export default function BoardPage() {
   const matchingRecords = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return caseRecords
-      .filter((record) => recordMatchesView(record, activeView, statusOverrides))
+      // When searching, span every loaded case (the query also pulls matches from the whole table);
+      // with no query, show just the current view (the active case list, or recent first calls).
+      .filter((record) => normalized !== '' || recordMatchesView(record, activeView, statusOverrides))
       .filter(
         (record) =>
           !normalized ||
@@ -3773,12 +3777,6 @@ export default function BoardPage() {
   const showMoreVisible = !operationsLoading && !operationsError && (moreLoadedClientSide || canFetchDeeper);
   // Per-register view: fetch one source tab (e.g. "Death Certificate 2024") whole from the server
   // and show all of it (switch to the all-cases view so the active-window filter doesn't hide it).
-  function chooseRegister(src: string) {
-    setRegisterFilter(src);
-    setFeedPerArea(0);
-    if (src) setActiveView('cases');
-    loadOperationsFeed({ query: search.trim(), source: src || undefined });
-  }
   function handleShowMore() {
     if (moreLoadedClientSide) {
       setRecordLimit((limit) => limit + visibleRecordLimit);
@@ -3798,9 +3796,9 @@ export default function BoardPage() {
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white p-1">
               <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
             </div>
-            <div className="min-w-0">
+            <button type="button" onClick={() => chooseView('active')} className="min-w-0 text-left" title="Back to all cases">
               <h1 className="truncate text-lg font-bold text-black">Golden Gate Dashboard</h1>
-            </div>
+            </button>
           </div>
           <div className="flex flex-wrap items-center gap-1">
             <button
@@ -3850,27 +3848,12 @@ export default function BoardPage() {
               <HeaderMetric label="Cases this month" value={casesThisMonth} />
               <HeaderMetric label="Cases this year" value={casesThisYear} />
             </div>
-            {(feedMeta?.registers?.length ?? 0) > 0 ? (
-              <select
-                value={registerFilter}
-                onChange={(event) => chooseRegister(event.target.value)}
-                className="hidden h-8 max-w-[190px] rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs font-semibold text-neutral-700 outline-none focus:border-[#efb70c] lg:block"
-                aria-label="View a register"
-              >
-                <option value="">All registers</option>
-                {feedMeta!.registers!.map((reg) => (
-                  <option key={reg.source} value={reg.source}>
-                    {reg.source} ({reg.count.toLocaleString()})
-                  </option>
-                ))}
-              </select>
-            ) : null}
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search family"
-              className="h-8 w-48 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:w-56"
-              aria-label="Search family or deceased"
+              placeholder="Search name, case #, date, service…"
+              className="h-8 w-56 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:w-72"
+              aria-label="Search any field — name, case number, dates, location, service crew & details"
             />
           </div>
         </div>
