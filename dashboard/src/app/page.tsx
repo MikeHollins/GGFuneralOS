@@ -1670,11 +1670,12 @@ function recordMatchesView(record: CaseRecord, view: ViewId, statusOverrides: Re
   if (view === 'cases') return true;
   if (view === 'calendar') return true;
   if (view === 'recent-first-calls') {
-    // Cases we originated via the New First Call drawer in the last 72 hours. First-call rows are
-    // tagged source_origin='ggfuneralos'; createdAt is when the intake was recorded.
+    // Cases we originated via the New First Call drawer in the last 72 hours. First-call rows carry
+    // the explicit source 'First Call' (no sheet tab is named that — a more durable marker than the
+    // default source_origin); createdAt is when the intake was recorded.
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
     return record.items.some(
-      (item) => item.sourceOrigin === 'ggfuneralos' && item.createdAt != null && new Date(item.createdAt).getTime() >= cutoff,
+      (item) => item.source === 'First Call' && item.createdAt != null && new Date(item.createdAt).getTime() >= cutoff,
     );
   }
   const filters = viewAreaFilters[view];
@@ -3737,7 +3738,7 @@ export default function BoardPage() {
                       {record.sourceCaseNumbers[0]}
                       {record.sourceCaseNumbers.length > 1 ? ` +${record.sourceCaseNumbers.length - 1}` : ''}
                     </span>
-                  ) : record.items.some((item) => item.sourceOrigin === 'ggfuneralos') ? (
+                  ) : record.items.some((item) => item.source === 'First Call') ? (
                     <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-bold uppercase text-amber-800">New</span>
                   ) : (
                     <span className="text-neutral-300">—</span>
