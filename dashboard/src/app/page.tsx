@@ -628,10 +628,16 @@ function pickIdentityStatus(items: DashboardItem[]) {
 // Numeric sort value for a case's highest Golden Gate ref (YY-NNN): (year*100000 + sequence), so
 // higher = newer. -1 when the case has no ref yet (those sort last under "Case # new→old").
 function caseNumberSortValue(record: CaseRecord) {
+  const maxYear = new Date().getFullYear() + 1;
   let best = -1;
   for (const cn of record.sourceCaseNumbers) {
     const match = cn.match(/^(\d{2})-(\d{3,4})$/);
-    if (match) best = Math.max(best, (2000 + Number(match[1])) * 100000 + Number(match[2]));
+    if (!match) continue;
+    const year = 2000 + Number(match[1]);
+    // Ignore implausible future-year prefixes (data-entry typos like 32-/34-) so they don't sort
+    // above legitimate current-year cases as if they were the newest.
+    if (year > maxYear) continue;
+    best = Math.max(best, year * 100000 + Number(match[2]));
   }
   return best;
 }
