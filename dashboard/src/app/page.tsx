@@ -1301,7 +1301,7 @@ function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; 
     <div className="space-y-2">
       {/* Everything about the service — date, time, location, package, crew, and logistics — in one
           editable place. Source values come from the Weekly Service Schedule; edits persist as overrides. */}
-      <DrawerDisclosure title="Service" meta="Date, time, location, package, crew & details — all editable" defaultOpen bodyClassName="p-3">
+      <DrawerDisclosure title="Service" meta="Date, time, location, package, crew & details — all editable" bodyClassName="p-3">
         <MilestoneFields record={record} keys={SERVICE_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-3" />
       </DrawerDisclosure>
       <DrawerDisclosure title="First call, cremation & burial" meta="Intake and disposition dates & locations" bodyClassName="p-3">
@@ -2206,6 +2206,15 @@ function HeaderMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function MobileMetricStamp({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex h-8 min-w-[46px] flex-col items-center justify-center rounded-md border border-neutral-200 bg-white px-1 leading-none">
+      <span className="text-[8px] font-black uppercase text-neutral-400">{label}</span>
+      <span className="mt-0.5 text-sm font-black text-neutral-950">{value}</span>
+    </div>
+  );
+}
+
 type CalendarMode = 'day' | 'week' | 'month' | 'year';
 type CaseCalendarEvent = {
   id: string;
@@ -3047,7 +3056,7 @@ function WorkflowChecklist({
   const doneCount = effectiveStates.filter((state) => state.done).length;
 
   return (
-    <DrawerDisclosure title="Family checklist" meta={`${doneCount}/${effectiveStates.length} complete`} defaultOpen>
+    <DrawerDisclosure title="Family checklist" meta={`${doneCount}/${effectiveStates.length} complete`}>
       {/* Compact multi-column boxes — all 8 steps visible at a glance. Click one to edit below. */}
       <div className="grid grid-cols-2 gap-1.5 p-3 sm:grid-cols-3 xl:grid-cols-4">
         {effectiveStates.map((st) => {
@@ -3352,6 +3361,7 @@ export default function BoardPage() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [firstCallOpen, setFirstCallOpen] = useState(false);
   const [mobileHeaderVisible, setMobileHeaderVisible] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const operationsRequestRef = useRef(0);
   const detailFetchedKeysRef = useRef<Set<string>>(new Set());
   const detailRequestRef = useRef(0);
@@ -3451,6 +3461,7 @@ export default function BoardPage() {
 
   function chooseView(view: ViewId) {
     setActiveView(view);
+    setMobileMenuOpen(false);
     const url = new URL(window.location.href);
     if (view === 'active') url.searchParams.delete('view');
     else url.searchParams.set('view', view);
@@ -3929,8 +3940,95 @@ export default function BoardPage() {
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
       <header className={`sticky top-0 z-20 border-b border-neutral-200 bg-white transition-transform duration-200 ease-out sm:translate-y-0 ${mobileHeaderVisible ? 'translate-y-0' : '-translate-y-full'}`}>
-        <div className="flex flex-wrap items-center gap-1 px-2 py-1.5 sm:gap-2 sm:px-3 sm:py-2">
-          <div className="flex min-w-0 items-center gap-2 max-sm:flex-1">
+        <div className="relative sm:hidden">
+          <div className="flex items-center gap-1 px-2 py-1">
+            <button type="button" onClick={() => chooseView('active')} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" title="Back to all cases">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white p-1">
+                <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
+              </span>
+              <span className="truncate text-base font-black text-black">GGFC</span>
+            </button>
+            <MobileMetricStamp label="Mo" value={casesThisMonth} />
+            <MobileMetricStamp label="Yr" value={casesThisYear} />
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              aria-expanded={mobileMenuOpen}
+              aria-label="Open dashboard menu"
+              className="flex h-8 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-lg font-black leading-none text-neutral-800"
+            >
+              ≡
+            </button>
+          </div>
+          <div className="flex items-center gap-1 px-2 pb-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setFirstCallOpen(true);
+              }}
+              className="h-8 shrink-0 rounded-md bg-red-600 px-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-red-700"
+            >
+              + First Call
+            </button>
+            <button
+              type="button"
+              onClick={() => chooseView('recent-first-calls')}
+              className={`h-8 shrink-0 rounded-md px-2.5 text-xs font-bold transition ${
+                activeView === 'recent-first-calls' ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+              }`}
+            >
+              Recent First Calls
+            </button>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search"
+              className="h-8 min-w-0 flex-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+              aria-label="Search any field — name, case number, dates, location, service crew & details"
+            />
+          </div>
+          {mobileMenuOpen ? (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-20 cursor-default bg-transparent"
+                aria-label="Close dashboard menu"
+                onClick={() => setMobileMenuOpen(false)}
+              />
+              <div className="absolute right-2 top-10 z-30 w-52 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 text-sm font-bold shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => chooseView('active')}
+                  className={`block w-full px-3 py-2 text-left ${activeView === 'active' ? 'bg-black text-[#efb70c]' : 'text-neutral-700 hover:bg-neutral-50'}`}
+                >
+                  All cases
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chooseView('calendar')}
+                  className={`block w-full px-3 py-2 text-left ${activeView === 'calendar' ? 'bg-black text-[#efb70c]' : 'text-neutral-700 hover:bg-neutral-50'}`}
+                >
+                  Calendar
+                </button>
+                <Link
+                  href="/staff"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="block px-3 py-2 text-neutral-700 hover:bg-neutral-50"
+                >
+                  Staff/Admin
+                </Link>
+                {appTopLinks.filter((link) => !link.ready).map((link) => (
+                  <span key={link.href} className="flex cursor-not-allowed items-center justify-between px-3 py-2 text-neutral-300">
+                    <span>{link.label}</span><span className="text-[10px] uppercase">soon</span>
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+        <div className="hidden flex-wrap items-center gap-1 px-2 py-1.5 sm:flex sm:gap-2 sm:px-3 sm:py-2">
+          <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white p-1">
               <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
             </div>
@@ -3938,38 +4036,34 @@ export default function BoardPage() {
               <h1 className="truncate text-lg font-bold text-black">Golden Gate Dashboard</h1>
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-1 sm:hidden">
-            <HeaderMetric label="Cases this month" value={casesThisMonth} />
-            <HeaderMetric label="Cases this year" value={casesThisYear} />
-          </div>
-          <div className="flex flex-wrap items-center gap-1 max-sm:order-3 max-sm:w-full max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:pb-0.5">
+          <div className="flex flex-wrap items-center gap-1">
             <button
               type="button"
               onClick={() => setFirstCallOpen(true)}
-              className="h-8 rounded-md bg-red-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-red-700 max-sm:shrink-0"
+              className="h-8 rounded-md bg-red-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-red-700"
             >
               + New First Call
             </button>
-            <span className="mx-1 h-8 border-l border-neutral-200 max-sm:hidden" aria-hidden="true" />
+            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
             {primaryViews.map((view) => (
               <button
                 key={view}
                 type="button"
                 onClick={() => chooseView(view)}
-                className={`h-8 rounded-md px-2.5 text-xs font-bold transition max-sm:shrink-0 ${
+                className={`h-8 rounded-md px-2.5 text-xs font-bold transition ${
                   activeView === view ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
                 {viewLabels[view]}
               </button>
             ))}
-            <span className="mx-1 h-8 border-l border-neutral-200 max-sm:hidden" aria-hidden="true" />
+            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
             {appTopLinks.map((link) =>
               link.ready ? (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950 max-sm:shrink-0"
+                  className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
                 >
                   {link.label}
                 </Link>
@@ -3983,15 +4077,8 @@ export default function BoardPage() {
                 </span>
               ),
             )}
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search family"
-              className="sticky right-0 z-10 h-8 w-28 shrink-0 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:hidden"
-              aria-label="Search any field — name, case number, dates, location, service crew & details"
-            />
           </div>
-          <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2 max-sm:hidden">
+          <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
               <HeaderMetric label="Cases this month" value={casesThisMonth} />

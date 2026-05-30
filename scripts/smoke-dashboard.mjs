@@ -244,6 +244,8 @@ async function main() {
     await page.getByRole('button', { name: /^Source evidence$/ }).waitFor({ timeout: 5000 });
     const firstPaintText = await drawer.innerText();
     assert(!/Loading all linked rows and files/i.test(firstPaintText), 'drawer blocks on linked rows/files loading message');
+    const openSections = await drawer.locator('details[open]').count();
+    assert(openSections === 0, `expected drawer sections to start collapsed, found ${openSections} open`);
     const drawerScrollInfo = await drawer.evaluate((node) => {
       const all = Array.from(node.querySelectorAll('*'));
       const primary = all.filter((el) => {
@@ -288,6 +290,10 @@ async function main() {
   });
 
   await check('status checklist closeout reads complete when closeout is checked', async () => {
+    if (await page.getByText('Sources', { exact: true }).count()) {
+      await page.getByRole('button', { name: /^Source evidence$/ }).click();
+    }
+    await page.getByText(/^Family checklist$/).click();
     const statusText = await page.getByRole('dialog').innerText();
     if (!/Closeout/i.test(statusText)) throw new Error('Closeout step missing from drawer');
     await page.getByRole('button', { name: /^Close$/ }).click();
