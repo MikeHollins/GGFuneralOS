@@ -3030,6 +3030,7 @@ export default function BoardPage() {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count'>('name');
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const [registerFilter, setRegisterFilter] = useState('');
   const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
   // 0 = use the server's default per-area window (250). "Show more" raises this to fetch deeper
   // history from the server on demand; the default page load never sends it, so normal load is
@@ -3071,6 +3072,7 @@ export default function BoardPage() {
     const delay = search.trim() ? 250 : 0;
     const timeout = window.setTimeout(() => {
       setFeedPerArea(0);
+      setRegisterFilter('');
       loadOperationsFeed({ query: search.trim() });
     }, delay);
     return () => window.clearTimeout(timeout);
@@ -3097,7 +3099,7 @@ export default function BoardPage() {
     window.dispatchEvent(new CustomEvent('ggfo-view-change'));
   }
 
-  function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number; perArea?: number } = {}) {
+  function loadOperationsFeed(options: { query?: string; caseKey?: string; merge?: boolean; limit?: number; perArea?: number; source?: string } = {}) {
     const requestId = options.merge ? operationsRequestRef.current : operationsRequestRef.current + 1;
     if (!options.merge) operationsRequestRef.current = requestId;
     const isDetailFetch = Boolean(options.merge && options.caseKey);
@@ -3111,6 +3113,7 @@ export default function BoardPage() {
       caseKey: options.caseKey || undefined,
       limit: options.limit,
       perArea: options.perArea,
+      source: options.source,
     })
       .then((response) => {
         if (!options.merge && requestId !== operationsRequestRef.current) return;
@@ -3530,7 +3533,7 @@ export default function BoardPage() {
   // leaves a stale large window applied to a freshly narrowed view.
   useEffect(() => {
     setRecordLimit(visibleRecordLimit);
-  }, [activeView, search, sortMode, attentionOnly]);
+  }, [activeView, search, sortMode, attentionOnly, registerFilter]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const visibleSummary = operationsLoading
     ? 'Loading dashboard records'
@@ -3551,6 +3554,14 @@ export default function BoardPage() {
   const moreLoadedClientSide = matchingRecords.length > recordLimit;
   const canFetchDeeper = Boolean(feedMeta?.limited) && (feedPerArea || 250) < 2000;
   const showMoreVisible = !operationsLoading && !operationsError && (moreLoadedClientSide || canFetchDeeper);
+  // Per-register view: fetch one source tab (e.g. "Death Certificate 2024") whole from the server
+  // and show all of it (switch to the all-cases view so the active-window filter doesn't hide it).
+  function chooseRegister(src: string) {
+    setRegisterFilter(src);
+    setFeedPerArea(0);
+    if (src) setActiveView('cases');
+    loadOperationsFeed({ query: search.trim(), source: src || undefined });
+  }
   function handleShowMore() {
     if (moreLoadedClientSide) {
       setRecordLimit((limit) => limit + visibleRecordLimit);
@@ -3614,6 +3625,21 @@ export default function BoardPage() {
               <HeaderMetric label="Cases this month" value={casesThisMonth} />
               <HeaderMetric label="Cases this year" value={casesThisYear} />
             </div>
+            {(feedMeta?.registers?.length ?? 0) > 0 ? (
+              <select
+                value={registerFilter}
+                onChange={(event) => chooseRegister(event.target.value)}
+                className="hidden h-8 max-w-[190px] rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs font-semibold text-neutral-700 outline-none focus:border-[#efb70c] lg:block"
+                aria-label="View a register"
+              >
+                <option value="">All registers</option>
+                {feedMeta!.registers!.map((reg) => (
+                  <option key={reg.source} value={reg.source}>
+                    {reg.source} ({reg.count.toLocaleString()})
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button
               type="button"
               onClick={() => setAttentionOnly((on) => !on)}

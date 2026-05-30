@@ -20,6 +20,7 @@ type ItemQuery = {
   query?: string;
   caseKey?: string;
   perArea?: number;
+  source?: string;
 };
 
 function canonicalCaseKeySql() {
@@ -88,7 +89,7 @@ function caseKeyPattern(caseKey: string) {
   return `%${parts.join('%')}%`;
 }
 
-function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
+function itemFilters({ query = '', caseKey = '', source = '' }: ItemQuery) {
   const filters = ['is_archived = false'];
   const params: any[] = [];
 
@@ -147,6 +148,13 @@ function itemFilters({ query = '', caseKey = '' }: ItemQuery) {
     )`);
   }
 
+  // Per-register filter: restrict to a single source tab (e.g. "Death Certificate 2024").
+  const cleanSource = source.trim();
+  if (cleanSource) {
+    params.push(cleanSource);
+    filters.push(`source = $${params.length}`);
+  }
+
   return { filters, params };
 }
 
@@ -162,17 +170,20 @@ async function getItems({
   query = '',
   caseKey = '',
   perArea = PER_AREA_LIMIT,
+  source = '',
 }: ItemQuery) {
   const sql = getSql();
   await seedItemsIfEmpty();
-  const { filters, params } = itemFilters({ query, caseKey });
+  const { filters, params } = itemFilters({ query, caseKey, source });
   const whereSql = filters.join(' AND ');
   const filterParams = [...params]; // WHERE params only, before list-specific limits are appended
 
   // The drawer fetches a single case and wants ALL of its rows (no per-area cap). The board
   // (no caseKey) uses a per-area window so every area surfaces its most-recent rows.
+  // A single-register (source) or single-case (caseKey) request wants ALL matching rows in one
+  // ordered list — no per-area window, which only exists to keep the multi-area board balanced.
   let listSql: string;
-  if (caseKey) {
+  if (caseKey || source) {
     params.push(limit);
     listSql = `SELECT ${ITEM_COLUMNS}
        FROM operational_items
@@ -422,6 +433,19 @@ async function checkGoogleCalendar(checkedAt: string): Promise<SourceStatus> {
   };
 }
 
+// Distinct source tabs ("registers") with row counts, for the per-register view dropdown.
+async function getRegisters() {
+  const sql = getSql();
+  const rows = await sql(
+    `SELECT source, count(*)::int AS count
+     FROM operational_items
+     WHERE is_archived = false AND source <> ''
+     GROUP BY source
+     ORDER BY count DESC`,
+  );
+  return rows.map((row: any) => ({ source: row.source as string, count: Number(row.count) }));
+}
+
 export async function GET(request: Request) {
   const session = await requireStaff();
   if (isAuthError(session)) return session;
@@ -430,9 +454,11 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const query = url.searchParams.get('q') ?? '';
   const caseKey = url.searchParams.get('case_key') ?? '';
-  const initialLimit = cleanLimit(url.searchParams.get('limit'), caseKey ? 2000 : 750);
+  const source = url.searchParams.get('source') ?? '';
+  // A single register can hold up to ~2.7k rows (Picked UP Cremains Log); fetch it whole.
+  const initialLimit = cleanLimit(url.searchParams.get('limit'), source ? 5000 : caseKey ? 2000 : 750);
   const perArea = cleanLimit(url.searchParams.get('per_area'), PER_AREA_LIMIT);
-  const sourceChecks = caseKey
+  const sourceChecks = caseKey || source
     ? []
     : [
         checkGoogleSheet(checkedAt),
@@ -447,16 +473,17 @@ export async function GET(request: Request) {
           checked_at: checkedAt,
         }),
       ];
-  const [feed, itemAudit, metrics, ...sources] = await Promise.all([
-    getItems({ limit: initialLimit, query, caseKey, perArea }),
+  const [feed, itemAudit, metrics, registers, ...sources] = await Promise.all([
+    getItems({ limit: initialLimit, query, caseKey, perArea, source }),
     getRecentItemAudit(),
     getDashboardMetrics(),
+    getRegisters(),
     ...sourceChecks,
   ]);
 
   return NextResponse.json({
     items: feed.items,
-    meta: { ...feed.meta, metrics },
+    meta: { ...feed.meta, metrics, registers },
     item_audit: itemAudit,
     sources,
   });

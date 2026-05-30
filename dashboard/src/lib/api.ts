@@ -45,12 +45,13 @@ export const getOperationalStatuses = (itemIds?: string[]) =>
     itemIds?.length ? `/dashboard/operational-status?item_ids=${encodeURIComponent(itemIds.join(','))}` : '/dashboard/operational-status'
   );
 
-export const getOperationsFeed = (params?: { q?: string; caseKey?: string; limit?: number; perArea?: number }) => {
+export const getOperationsFeed = (params?: { q?: string; caseKey?: string; limit?: number; perArea?: number; source?: string }) => {
   const search = new URLSearchParams();
   if (params?.q) search.set('q', params.q);
   if (params?.caseKey) search.set('case_key', params.caseKey);
   if (params?.limit) search.set('limit', String(params.limit));
   if (params?.perArea) search.set('per_area', String(params.perArea));
+  if (params?.source) search.set('source', params.source);
   const query = search.toString();
   return apiFetch<OperationsFeed>(`/dashboard/operations${query ? `?${query}` : ''}`);
 };
@@ -327,6 +328,7 @@ export interface OperationsFeed {
         cases_this_year: string;
       };
     };
+    registers?: Array<{ source: string; count: number }>;
   };
   item_audit: OperationalItemAudit[];
   sources: Array<{
