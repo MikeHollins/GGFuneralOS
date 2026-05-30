@@ -250,7 +250,9 @@ const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_M
 const IDENTITY_REF_DEFS: MilestoneDef[] = [
   { key: 'cremation_number', label: 'Cremation #', full: 'Cremation case #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: [], refSource: 'cremation' },
   { key: 'mokan_number', label: 'MoKan #', full: 'MoKan #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: ['mokan'], refSource: 'mokan' },
-  { key: 'dc_number', label: 'DC #', full: 'Death certificate #', kind: 'text', areas: ['death-cert'], sourceKeys: [], refSource: 'dc' },
+  // The death-certificate "Case" number IS the GG Case Number (shown in its own column), and Golden
+  // Gate stores no separate DC document number — so there's no DC box here; it would just duplicate
+  // the case number. caseRefsFromSource still reads the stamped dc value to drive canonicalCaseRef.
 ];
 type IdentityRefOverrideMap = MilestoneOverrideMap;
 
@@ -1209,7 +1211,7 @@ function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; 
       </div>
       <div className="mt-3 border-t border-neutral-100 pt-3">
         <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Case documentation #s</div>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2">
           {IDENTITY_REF_DEFS.map((def) => (
             <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
           ))}
@@ -2498,7 +2500,7 @@ function DeceasedCell({
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-1">
+        <div className="grid grid-cols-2 gap-1">
           {refs.map((state) => (
             <div key={state.def.key} className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${milestoneCellTone(state)}`}>
               <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{state.def.label}</div>
