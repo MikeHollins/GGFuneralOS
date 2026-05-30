@@ -4,6 +4,7 @@
   "outputDirectory": ".next",
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/cron/sync", "schedule": "*/15 12-23 * * *" }
+    { "path": "/api/cron/sync", "schedule": "*/15 12-23 * * *" },
+    { "path": "/api/cron/obituary-sync", "schedule": "0 13,21 * * *" }
   ]
 }
