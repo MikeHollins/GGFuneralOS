@@ -625,6 +625,17 @@ function pickIdentityStatus(items: DashboardItem[]) {
   return worst;
 }
 
+// Numeric sort value for a case's highest Golden Gate ref (YY-NNN): (year*100000 + sequence), so
+// higher = newer. -1 when the case has no ref yet (those sort last under "Case # new→old").
+function caseNumberSortValue(record: CaseRecord) {
+  let best = -1;
+  for (const cn of record.sourceCaseNumbers) {
+    const match = cn.match(/^(\d{2})-(\d{3,4})$/);
+    if (match) best = Math.max(best, (2000 + Number(match[1])) * 100000 + Number(match[2]));
+  }
+  return best;
+}
+
 function caseKeyForItem(item: DashboardItem) {
   const payload = sourcePayload(item);
   // Canonical case identity = name + death-year, resolved in the sync (master-sheet-sync.ts).
@@ -3040,7 +3051,7 @@ function DetailDrawer({
 export default function BoardPage() {
   const [activeView, setActiveView] = useState<ViewId>('active');
   const [search, setSearch] = useState('');
-  const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count'>('name');
+  const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count' | 'casenum'>('casenum');
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [registerFilter, setRegisterFilter] = useState('');
   const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
@@ -3532,6 +3543,9 @@ export default function BoardPage() {
         (record) => !attentionOnly || (workflowStateByKey.get(record.key) ?? []).some((state) => state.gap),
       )
       .sort((a, b) => {
+        if (sortMode === 'casenum') {
+          return caseNumberSortValue(b) - caseNumberSortValue(a) || a.name.localeCompare(b.name);
+        }
         if (sortMode === 'recent') {
           return (b.updatedAt || '').localeCompare(a.updatedAt || '') || a.name.localeCompare(b.name);
         }
@@ -3676,10 +3690,11 @@ export default function BoardPage() {
             </button>
             <select
               value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as 'name' | 'recent' | 'count')}
+              onChange={(event) => setSortMode(event.target.value as 'name' | 'recent' | 'count' | 'casenum')}
               className="hidden h-8 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs font-semibold text-neutral-700 outline-none focus:border-[#efb70c] sm:block"
               aria-label="Sort families"
             >
+              <option value="casenum">Sort: Case # (new→old)</option>
               <option value="name">Sort: Name A–Z</option>
               <option value="recent">Sort: Recently updated</option>
               <option value="count">Sort: Most records</option>
