@@ -55,7 +55,9 @@ The dashboard can now ORIGINATE a case (the migration beachhead), not just mirro
 - **`first_call_intake` table** (migration `017`): system-of-record for the intake event; `date_of_death` + `nok_name` NOT NULL (fail-closed).
 - **`POST /api/dashboard/first-call`** (`de7ab9b`): validates (last name, DOD, NOK, initials), writes the intake row + a board row (`operational_items`, `source='First Call'`, `source_origin='ggfuneralos'`, DOD set → MoEVR clock starts) + NOK (`case_contact_state`) + first-call step done (`case_workflow_state`). Threads with later sheet rows by name+death-year.
 - **UI** (`bf442cd`/`d3a6be4`/`dc5ca50`): red **"+ New First Call"** top button → 7-section drawer; **"Recent First Calls"** top view (cases with a `source='First Call'` item in last 72h); **Case #** column left of Deceased (GG ref, or amber "New" for un-numbered first-call cases). First-call detection keys on the explicit `source='First Call'` (durable, not the default origin).
-- Verified end-to-end via Playwright (create → appears in Recent First Calls with New badge); all QA fixtures deleted. No family-facing sends; read-only on their side.
+- **Suggested case number** (`5362190`, migration `018`): `GET /api/dashboard/first-call` returns the next `YY-NNN` (highest seen + 1, currently 26-1547); the drawer pre-fills it and the director can override it (Golden Gate may be on a different counter). Stored on `first_call_intake.case_number` + `operational_items.source_case_number` so it shows in the Case # column.
+- **Default board sort = Case # (new→old)** (`16312fc`): orders by each case's highest `YY-NNN` (year×100000+seq) descending; future-prefix typos (`32-`/`34-`) are excluded so they don't rank as newest; no-ref cases sort last.
+- Verified end-to-end via Playwright (create → appears in Recent First Calls with New badge → carries its case number → sorts to top); all QA fixtures deleted. No family-facing sends; read-only on their side.
 
 ## Viewing parity — COMPLETE 2026-05-29/30 (all dashboard-only, verified, pushed)
 
