@@ -48,6 +48,15 @@ Full output: `tasks/wr9g1wq4j.output`. Highlights:
 
 **Plan status:** DONE = identity layer (resolver + grouping + date-bridge), verified metrics, source landscape. READY-TO-BUILD (our-side-only) = data-quality flag, identity-quality UI, viewing-parity (sort/pagination/per-register/filters), create/edit-in-Neon, obituary read-only cross-check. GATED (director review + sandbox) = all family-facing (Twilio/SMS/email/auto-publish), sheet write-back, Drive ingestion (needs correct account).
 
+## Viewing parity — COMPLETE 2026-05-29/30 (all dashboard-only, verified, pushed)
+
+- **Sort** (`d903029`): Name / Recently updated / Most records (was hard-coded alphabetical).
+- **Reach all rows** (`d903029`+`f4f05b8`): "Show more" reveals client-loaded records, then "Load more from source" raises the per-area server window (`per_area`, capped 2000) — verified 200→749. Default load unchanged.
+- **"Needs attention" filter** (`1d737ef`): shows cases with a skipped workflow step (the `gap` signal) — verified active 195→61.
+- **Per-register views** (`ce26213`): a register dropdown (19 source tabs w/ counts from new `meta.registers`) fetches a chosen register whole via `?source=` (no per-area window, limit 5000) — verified Belongings→166, Death Certificate 2024→1,144. Matches their sheet-tab mental model.
+
+Remaining viewing nit: #4 bad-prefix DQ surface — already handled on the metric side (the year clamp excludes `32-`/`34-`), and the 4 rows are findable via search; a dedicated badge is low value.
+
 ## Auto-ingestion — LIVE 2026-05-29 (commit `df82a34`)
 
 Scheduled freshness without touching their side: a secret-gated `GET /api/cron/sync` endpoint runs `syncMasterSheet` (read-only on their sheet, writes our Neon; advisory-lock + cooldown guarded, idempotent). Gated by `Authorization: Bearer $CRON_SECRET` (Vercel auto-sends this to cron invocations; `CRON_SECRET` set in Vercel prod env). Cron routes are exempted from the session middleware (`src/middleware.ts`) since they self-authenticate. Scheduled in `dashboard/vercel.json`: `*/15 12-23 * * *` (every 15 min, 12–23 UTC ≈ 7am–7pm Central business hours).
