@@ -243,7 +243,25 @@ const LOCATION_MILESTONES: MilestoneDef[] = [
 const SERVICE_MILESTONES: MilestoneDef[] = [
   { key: 'service_type', label: 'Service', full: 'Service / package', kind: 'select', areas: ['arrangement', 'service'], sourceKeys: ['service_type', 'package', 'disposition_type', 'contract_type'], options: GG_SERVICE_OPTIONS },
 ];
-const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_MILESTONES];
+// Crew + logistics from the Weekly Service Schedule, each its own editable field (text). Source value
+// comes from the matching column on the service row; a staff override persists in case_milestones.
+const SERVICE_EXTRA_MILESTONES: MilestoneDef[] = [
+  { key: 'service_time', label: 'Time', full: 'Service time', kind: 'text', areas: ['service', 'arrangement'], sourceKeys: ['service_time', 'time'] },
+  { key: 'service_lead', label: 'Lead', full: 'Lead director', kind: 'text', areas: ['service'], sourceKeys: ['lead'] },
+  { key: 'service_lady', label: 'Lady', full: 'Lead lady', kind: 'text', areas: ['service'], sourceKeys: ['lady', 'lead_lady'] },
+  { key: 'service_call', label: 'Call', full: 'On-call crew', kind: 'text', areas: ['service'], sourceKeys: ['call'] },
+  { key: 'service_arrival', label: 'Arrival', full: 'Arrival time', kind: 'text', areas: ['service'], sourceKeys: ['arrival'] },
+  { key: 'service_hearse', label: 'Hearse', full: 'Hearse', kind: 'text', areas: ['service'], sourceKeys: ['hearse'] },
+  { key: 'service_limo', label: 'Limo', full: 'Limo', kind: 'text', areas: ['service'], sourceKeys: ['limo'] },
+  { key: 'service_casket', label: 'Casket', full: 'Casket', kind: 'text', areas: ['service'], sourceKeys: ['casket'] },
+  { key: 'service_flowers', label: 'Flowers', full: 'Flowers', kind: 'text', areas: ['service'], sourceKeys: ['flowers'] },
+  { key: 'service_programs', label: 'Programs', full: 'Programs', kind: 'text', areas: ['service'], sourceKeys: ['programs'] },
+];
+const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_MILESTONES, ...SERVICE_EXTRA_MILESTONES];
+const MILESTONE_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
+// Drawer grouping: everything about the service in one editable block; intake/disposition in another.
+const SERVICE_SECTION_KEYS = ['service', 'service_time', 'service_location', 'service_type', 'service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_hearse', 'service_limo', 'service_casket', 'service_flowers', 'service_programs'];
+const NON_SERVICE_MILESTONE_KEYS = ['first_call', 'cremation', 'cremation_location', 'burial', 'burial_location'];
 // Documentation numbers shown in the Deceased cell and editable in the drawer. Their source value is
 // pulled source-aware from the synced Crematory/Death-Certificate rows (see caseRefsFromSource); a
 // staff override persists in case_milestones (overlay table the sync never touches) and wins when set.
@@ -1024,7 +1042,10 @@ function sourceMilestoneValue(record: CaseRecord, def: MilestoneDef) {
     const payload = sourcePayload(item);
     for (const key of def.sourceKeys) {
       const value = cleanDisplay(payload[key]).trim();
-      if (!value || isMilestoneNoise(value)) continue;
+      if (!value) continue;
+      // Text fields (service crew/logistics) keep raw answers like "No"/"N/A"; date/location slots
+      // reject that noise so a "No" can't masquerade as a date or place.
+      if (def.kind !== 'text' && isMilestoneNoise(value)) continue;
       if (def.kind === 'date' && /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\s*$/i.test(value)) continue; // a time alone is not a date
       return value;
     }
@@ -1125,18 +1146,6 @@ const SCHEDULE_EVENTS: Array<{ label: string; dateKey: string; locationKey?: str
 ];
 const SCHEDULE_DEF_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
 
-// Service time as recorded on the Weekly Service Schedule (informal text like "Service 3pm" or
-// "Thurs 10-11am"); shown next to the service date in its bubble. Other events have no time column.
-function serviceTime(record: CaseRecord): string {
-  for (const item of record.items) {
-    if (item.area !== 'service') continue;
-    const p = sourcePayload(item);
-    const t = cleanDisplay(p.service_time) || cleanDisplay(p.time);
-    if (t && !isMilestoneNoise(t)) return t;
-  }
-  return '';
-}
-
 function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overrides: MilestoneOverrideMap; onOpen: () => void }) {
   const show = (s: MilestoneState) => (s.state === 'empty' ? '…' : s.state === 'na' ? 'N/A' : s.value);
   const filled = (s: MilestoneState) => s.state === 'set' || s.state === 'source';
@@ -1149,7 +1158,8 @@ function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overr
       {SCHEDULE_EVENTS.map((ev) => {
         const dateState = effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.dateKey)!, overrides);
         const locState = ev.locationKey ? effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.locationKey)!, overrides) : null;
-        const time = ev.label === 'Service' ? serviceTime(record) : '';
+        const timeState = ev.label === 'Service' ? effectiveMilestone(record, MILESTONE_BY_KEY.get('service_time')!, overrides) : null;
+        const time = timeState && filled(timeState) ? timeState.value : '';
         const dateLine = [filled(dateState) ? dateState.value : '', time].filter(Boolean).join(' · ') || show(dateState);
         const dateFilled = filled(dateState) || Boolean(time);
         const anyFilled = dateFilled || (locState ? filled(locState) : false);
@@ -1169,6 +1179,17 @@ function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overr
             {ev.locationKey ? (
               <div className={`truncate ${locState && filled(locState) ? '' : 'italic opacity-70'}`}>{show(locState!)}</div>
             ) : null}
+            {ev.label === 'Service'
+              ? SERVICE_EXTRA_MILESTONES.filter((d) => d.key !== 'service_time').map((d) => {
+                  const s = effectiveMilestone(record, d, overrides);
+                  if (!filled(s)) return null;
+                  return (
+                    <div key={d.key} className="truncate text-[9px] opacity-80">
+                      <span className="font-semibold">{d.label}</span> {s.value}
+                    </div>
+                  );
+                })
+              : null}
           </div>
         );
       })}
@@ -1263,23 +1284,35 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
   );
 }
 
+function MilestoneFields({ record, keys, overrides, onCommit, cols }: { record: CaseRecord; keys: string[]; overrides: MilestoneOverrideMap; onCommit: CommitMilestone; cols: string }) {
+  return (
+    <div className={`grid gap-2 ${cols}`}>
+      {keys.map((k) => MILESTONE_BY_KEY.get(k)).filter((d): d is MilestoneDef => Boolean(d)).map((def) => (
+        <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
+      ))}
+    </div>
+  );
+}
+
 function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
   return (
-    <DrawerDisclosure title="Scheduling & locations" meta="First call, service, cremation, burial, and location slots" bodyClassName="p-3">
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {ALL_MILESTONES.map((def) => (
-          <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
-        ))}
-      </div>
-      <div className="mt-3 border-t border-neutral-100 pt-3">
-        <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Case documentation #s</div>
+    <div className="space-y-2">
+      {/* Everything about the service — date, time, location, package, crew, and logistics — in one
+          editable place. Source values come from the Weekly Service Schedule; edits persist as overrides. */}
+      <DrawerDisclosure title="Service" meta="Date, time, location, package, crew & details — all editable" defaultOpen bodyClassName="p-3">
+        <MilestoneFields record={record} keys={SERVICE_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-3" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="First call, cremation & burial" meta="Intake and disposition dates & locations" bodyClassName="p-3">
+        <MilestoneFields record={record} keys={NON_SERVICE_MILESTONE_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-4" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="Case documentation #s" meta="Cremation and MoKan numbers" bodyClassName="p-3">
         <div className="grid gap-2 sm:grid-cols-2">
           {IDENTITY_REF_DEFS.map((def) => (
             <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
           ))}
         </div>
-      </div>
-    </DrawerDisclosure>
+      </DrawerDisclosure>
+    </div>
   );
 }
 
