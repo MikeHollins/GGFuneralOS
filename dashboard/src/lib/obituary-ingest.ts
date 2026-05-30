@@ -16,14 +16,21 @@ type Obit = { first_name?: string; middle_name?: string; last_name?: string; dat
 function norm(value: string | null | undefined): string {
   return (value ?? '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
-// "last first" and "last first middle" candidate keys (sheet keys are last-first ordered).
+// "last first", "last first middle", and "last first <middle-initial>" candidate keys (sheet keys are
+// last-first ordered; the sheet often records only a middle initial where the obit has the full name).
 function candidateKeys(o: Obit): string[] {
   const last = norm(o.last_name);
   const first = norm(o.first_name);
   const mid = norm(o.middle_name);
   if (!last || !first) return [];
-  return mid ? [`${last} ${first} ${mid}`, `${last} ${first}`] : [`${last} ${first}`];
+  if (!mid) return [`${last} ${first}`];
+  return [`${last} ${first} ${mid}`, `${last} ${first} ${mid[0]}`, `${last} ${first}`];
 }
+// Generational suffixes are match noise: the obit may carry "Smith Jr" where the sheet has plain
+// "Smith" (or vice versa). Stripping them lets the two reconcile — but only when UNAMBIGUOUS (see below),
+// so a father (Sr) and son (Jr) who died the same year never cross-fill.
+const SUFFIX_RE = /\b(jr|sr|ii|iii|iv|v)\b/g;
+const stripSuffix = (k: string): string => k.replace(SUFFIX_RE, ' ').replace(/\s+/g, ' ').trim();
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
 async function fetchAllObits(): Promise<Obit[]> {
@@ -52,10 +59,17 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
      WHERE is_archived = false AND coalesce(source_payload->>'case_match_key','') <> ''`,
   )) as any[];
   const byKey = new Map<string, any[]>();
-  for (const r of rows) { if (!byKey.has(r.k)) byKey.set(r.k, []); byKey.get(r.k)!.push(r); }
+  const suffixBuckets = new Map<string, Set<string>>(); // suffix-stripped key -> set of raw case_match_keys
+  for (const r of rows) {
+    if (!byKey.has(r.k)) byKey.set(r.k, []);
+    byKey.get(r.k)!.push(r);
+    const sk = stripSuffix(r.k);
+    if (!suffixBuckets.has(sk)) suffixBuckets.set(sk, new Set());
+    suffixBuckets.get(sk)!.add(r.k);
+  }
 
   const obits = await fetchAllObits();
-  const stats = { obits: obits.length, matchedCases: 0, filledDod: 0, filledDob: 0, unmatched: 0, applied: 0 };
+  const stats = { obits: obits.length, matchedCases: 0, recoveredSuffix: 0, filledDod: 0, filledDob: 0, unmatched: 0, applied: 0 };
   const updates: Array<{ item_id: string; dod: string | null; dob: string | null; ef: Record<string, boolean> }> = [];
 
   for (const o of obits) {
@@ -68,6 +82,19 @@ export async function syncObituaries({ apply = false }: { apply?: boolean } = {}
     for (const key of candidateKeys(o)) {
       const c = (byKey.get(key) || []).filter((r) => !r.y || r.y === year);
       if (c.length) { cands = c; break; }
+    }
+    if (!cands.length) {
+      // Suffix-normalized fallback: reconcile "Smith Jr" <-> "Smith" — but only when the stripped name
+      // resolves to exactly ONE case in that death-year (fail-closed; never cross-fill Jr vs Sr).
+      const last = norm(o.last_name); const first = norm(o.first_name);
+      const stripped = stripSuffix(`${last} ${first}`);
+      const rawKeys = [...(suffixBuckets.get(stripped) || [])].filter((rk) =>
+        (byKey.get(rk) || []).some((r) => !r.y || r.y === year),
+      );
+      if (rawKeys.length === 1) {
+        cands = (byKey.get(rawKeys[0]) || []).filter((r) => !r.y || r.y === year);
+        if (cands.length) stats.recoveredSuffix++;
+      }
     }
     if (!cands.length) { stats.unmatched++; continue; }
     stats.matchedCases++;
