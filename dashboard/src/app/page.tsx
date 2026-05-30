@@ -3029,6 +3029,7 @@ export default function BoardPage() {
   const [activeView, setActiveView] = useState<ViewId>('active');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<'name' | 'recent' | 'count'>('name');
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const [recordLimit, setRecordLimit] = useState(visibleRecordLimit);
   // 0 = use the server's default per-area window (250). "Show more" raises this to fetch deeper
   // history from the server on demand; the default page load never sends it, so normal load is
@@ -3509,6 +3510,11 @@ export default function BoardPage() {
           milestoneSearchText(record, milestoneOverrides).toLowerCase().includes(normalized) ||
           contactSearchText(record, contactOverrides).toLowerCase().includes(normalized),
       )
+      .filter(
+        // "Needs attention" = a workflow step was skipped (an earlier step is undone while a
+        // later one is done) — the throughput signal for "no steps missed".
+        (record) => !attentionOnly || (workflowStateByKey.get(record.key) ?? []).some((state) => state.gap),
+      )
       .sort((a, b) => {
         if (sortMode === 'recent') {
           return (b.updatedAt || '').localeCompare(a.updatedAt || '') || a.name.localeCompare(b.name);
@@ -3518,13 +3524,13 @@ export default function BoardPage() {
         }
         return a.name.localeCompare(b.name);
       });
-  }, [activeView, caseRecords, search, sortMode, statusOverrides, milestoneOverrides, contactOverrides]);
+  }, [activeView, caseRecords, search, sortMode, attentionOnly, workflowStateByKey, statusOverrides, milestoneOverrides, contactOverrides]);
   const visibleRecords = useMemo(() => matchingRecords.slice(0, recordLimit), [matchingRecords, recordLimit]);
   // Reset the visible window whenever the filtered/sorted set changes, so "Show more" never
   // leaves a stale large window applied to a freshly narrowed view.
   useEffect(() => {
     setRecordLimit(visibleRecordLimit);
-  }, [activeView, search, sortMode]);
+  }, [activeView, search, sortMode, attentionOnly]);
   const selectedRecord = selectedKey ? caseRecords.find((record) => record.key === selectedKey) ?? null : null;
   const visibleSummary = operationsLoading
     ? 'Loading dashboard records'
@@ -3608,6 +3614,19 @@ export default function BoardPage() {
               <HeaderMetric label="Cases this month" value={casesThisMonth} />
               <HeaderMetric label="Cases this year" value={casesThisYear} />
             </div>
+            <button
+              type="button"
+              onClick={() => setAttentionOnly((on) => !on)}
+              aria-pressed={attentionOnly}
+              title="Show only cases with a skipped workflow step"
+              className={`hidden h-8 rounded-md border px-2.5 text-xs font-bold transition sm:block ${
+                attentionOnly
+                  ? 'border-amber-300 bg-amber-50 text-amber-800'
+                  : 'border-neutral-200 bg-neutral-50 text-neutral-600 hover:bg-neutral-100'
+              }`}
+            >
+              Needs attention
+            </button>
             <select
               value={sortMode}
               onChange={(event) => setSortMode(event.target.value as 'name' | 'recent' | 'count')}
