@@ -1125,6 +1125,18 @@ const SCHEDULE_EVENTS: Array<{ label: string; dateKey: string; locationKey?: str
 ];
 const SCHEDULE_DEF_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
 
+// Service time as recorded on the Weekly Service Schedule (informal text like "Service 3pm" or
+// "Thurs 10-11am"); shown next to the service date in its bubble. Other events have no time column.
+function serviceTime(record: CaseRecord): string {
+  for (const item of record.items) {
+    if (item.area !== 'service') continue;
+    const p = sourcePayload(item);
+    const t = cleanDisplay(p.service_time) || cleanDisplay(p.time);
+    if (t && !isMilestoneNoise(t)) return t;
+  }
+  return '';
+}
+
 function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overrides: MilestoneOverrideMap; onOpen: () => void }) {
   const show = (s: MilestoneState) => (s.state === 'empty' ? '…' : s.state === 'na' ? 'N/A' : s.value);
   const filled = (s: MilestoneState) => s.state === 'set' || s.state === 'source';
@@ -1137,7 +1149,10 @@ function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overr
       {SCHEDULE_EVENTS.map((ev) => {
         const dateState = effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.dateKey)!, overrides);
         const locState = ev.locationKey ? effectiveMilestone(record, SCHEDULE_DEF_BY_KEY.get(ev.locationKey)!, overrides) : null;
-        const anyFilled = filled(dateState) || (locState ? filled(locState) : false);
+        const time = ev.label === 'Service' ? serviceTime(record) : '';
+        const dateLine = [filled(dateState) ? dateState.value : '', time].filter(Boolean).join(' · ') || show(dateState);
+        const dateFilled = filled(dateState) || Boolean(time);
+        const anyFilled = dateFilled || (locState ? filled(locState) : false);
         const anyNa = dateState.state === 'na' || locState?.state === 'na';
         const overridden = dateState.overridden || Boolean(locState?.overridden);
         const tone = anyFilled
@@ -1150,7 +1165,7 @@ function ScheduleCell({ record, overrides, onOpen }: { record: CaseRecord; overr
         return (
           <div key={ev.label} className={`min-w-0 rounded-md border px-1.5 py-1 ${tone}`}>
             <div className="truncate text-[9px] font-bold uppercase tracking-wide opacity-70">{ev.label}</div>
-            <div className={`truncate font-semibold ${filled(dateState) ? '' : 'italic opacity-80'}`}>{show(dateState)}</div>
+            <div className={`truncate font-semibold ${dateFilled ? '' : 'italic opacity-80'}`}>{dateLine}</div>
             {ev.locationKey ? (
               <div className={`truncate ${locState && filled(locState) ? '' : 'italic opacity-70'}`}>{show(locState!)}</div>
             ) : null}
