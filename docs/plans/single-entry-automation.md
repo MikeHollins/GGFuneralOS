@@ -48,6 +48,14 @@ Full output: `tasks/wr9g1wq4j.output`. Highlights:
 
 **Plan status:** DONE = identity layer (resolver + grouping + date-bridge), verified metrics, source landscape. READY-TO-BUILD (our-side-only) = data-quality flag, identity-quality UI, viewing-parity (sort/pagination/per-register/filters), create/edit-in-Neon, obituary read-only cross-check. GATED (director review + sandbox) = all family-facing (Twilio/SMS/email/auto-publish), sheet write-back, Drive ingestion (needs correct account).
 
+## Auto-ingestion — LIVE 2026-05-29 (commit `df82a34`)
+
+Scheduled freshness without touching their side: a secret-gated `GET /api/cron/sync` endpoint runs `syncMasterSheet` (read-only on their sheet, writes our Neon; advisory-lock + cooldown guarded, idempotent). Gated by `Authorization: Bearer $CRON_SECRET` (Vercel auto-sends this to cron invocations; `CRON_SECRET` set in Vercel prod env). Cron routes are exempted from the session middleware (`src/middleware.ts`) since they self-authenticate. Scheduled in `dashboard/vercel.json`: `*/15 12-23 * * *` (every 15 min, 12–23 UTC ≈ 7am–7pm Central business hours).
+
+**Verified:** endpoint returns 401 without/with wrong secret, 200 + full sync (15,039 parsed, sync_run_id) with the correct secret — exactly what Vercel cron invokes. **Pending live confirmation:** first scheduled fire is 12:00 UTC (was deployed at ~03:00 UTC, outside the window); confirm by checking `source_sheet_sync_runs` for runs at :00/:15/:30/:45 during 12–23 UTC.
+
+**Future optimization (noted):** each run does a full 15k-row sync. A cheap change-detector (Drive `modifiedTime`/revision) would skip unchanged polls, but the service account currently holds only `spreadsheets.readonly` scope — adding Drive metadata scope is a Google Cloud change. Until then, full idempotent sync each tick is acceptable (read-only on their side, our-side write cost only).
+
 ## Governing rules
 
 Fail-closed on every compliance deadline; never substitute a "nearby" variable for a legal date (§7/§9/§10). Auto-publishing and any family-facing send stay gated behind director approval. Read-only sources (Google sheet, SMB, Gmail, Calendar) are **never** written back to — all staff-authored truth lives in Neon override tables, preserved across re-sync via `edited_fields`. One canonical implementation for case identity and deadline math (§13).
