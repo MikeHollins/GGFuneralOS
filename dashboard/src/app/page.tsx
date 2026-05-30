@@ -219,7 +219,7 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 
 // Structured scheduling/location milestones shown as compact grid slots and edited in the
 // drawer. Source-derived values are the default; staff overrides (incl. N/A) live in Neon.
-type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location' | 'select'; areas: OperationArea[]; sourceKeys: string[]; options?: string[] };
+type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location' | 'select' | 'text'; areas: OperationArea[]; sourceKeys: string[]; options?: string[]; refSource?: 'cremation' | 'mokan' | 'dc' };
 
 // Golden Gate's service packages (from kcgoldengate.com/our-packages), cremation-tier first.
 const GG_SERVICE_OPTIONS = [
@@ -244,6 +244,15 @@ const SERVICE_MILESTONES: MilestoneDef[] = [
   { key: 'service_type', label: 'Service', full: 'Service / package', kind: 'select', areas: ['arrangement', 'service'], sourceKeys: ['service_type', 'package', 'disposition_type', 'contract_type'], options: GG_SERVICE_OPTIONS },
 ];
 const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_MILESTONES];
+// Documentation numbers shown in the Deceased cell and editable in the drawer. Their source value is
+// pulled source-aware from the synced Crematory/Death-Certificate rows (see caseRefsFromSource); a
+// staff override persists in case_milestones (overlay table the sync never touches) and wins when set.
+const IDENTITY_REF_DEFS: MilestoneDef[] = [
+  { key: 'cremation_number', label: 'Cremation #', full: 'Cremation case #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: [], refSource: 'cremation' },
+  { key: 'mokan_number', label: 'MoKan #', full: 'MoKan #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: ['mokan'], refSource: 'mokan' },
+  { key: 'dc_number', label: 'DC #', full: 'Death certificate #', kind: 'text', areas: ['death-cert'], sourceKeys: [], refSource: 'dc' },
+];
+type IdentityRefOverrideMap = MilestoneOverrideMap;
 
 type MilestoneOverride = { value: string; isNa: boolean; initials: string };
 type MilestoneOverrideMap = Record<string, Record<string, MilestoneOverride>>;
@@ -1001,6 +1010,8 @@ function isMilestoneNoise(value: string) {
 // area, skip noise, and (for date slots) skip time-only values. Falls back to all rows
 // only when no area-matched row exists, so the mapping never silently goes empty.
 function sourceMilestoneValue(record: CaseRecord, def: MilestoneDef) {
+  // Documentation-number defs read their value source-aware (right register's case number / mokan).
+  if (def.refSource) return caseRefsFromSource(record)[def.refSource];
   const inArea = def.areas.length ? record.items.filter((item) => def.areas.includes(item.area)) : [];
   const pool = inArea.length ? inArea : record.items;
   for (const item of pool) {
@@ -1168,7 +1179,7 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
           onKeyDown={(event) => {
             if (event.key === 'Escape') setEditing(false);
           }}
-          placeholder={def.kind === 'date' ? 'MM/DD/YYYY or Jun 3, 2026' : 'Location'}
+          placeholder={def.kind === 'date' ? 'MM/DD/YYYY or Jun 3, 2026' : def.kind === 'text' ? 'e.g. 26-461' : 'Location'}
           className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
           autoFocus
         />
@@ -1191,6 +1202,14 @@ function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; 
         {ALL_MILESTONES.map((def) => (
           <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
         ))}
+      </div>
+      <div className="mt-3 border-t border-neutral-100 pt-3">
+        <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Case documentation #s</div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {IDENTITY_REF_DEFS.map((def) => (
+            <MilestoneField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
+          ))}
+        </div>
       </div>
     </DrawerDisclosure>
   );
@@ -2402,42 +2421,43 @@ function CalendarBoard({
   );
 }
 
+// Pull the case's documentation numbers straight from the synced source rows: the Crematory Log row
+// carries the cremation case number + MoKan number, the Death Certificate row carries the DC number.
+// These come in via the 15-min master-sheet sync (Golden Gate's logs are the source of truth), so a
+// staff override (see identityRefOverrides) wins when present, else the live source value shows.
+function caseRefsFromSource(record: CaseRecord): { cremation: string; mokan: string; dc: string } {
+  let cremation = '';
+  let mokan = '';
+  let dc = '';
+  for (const item of record.items) {
+    const src = (item.source ?? '').toLowerCase();
+    const payload = sourcePayload(item);
+    const cn = cleanDisplay(item.sourceCaseNumber) || cleanDisplay(payload.source_case_number) || '';
+    if (src.includes('cremat')) {
+      if (!cremation && /^\d{2}-\d{1,4}$/.test(cn)) cremation = cn;
+      if (!mokan) mokan = cleanDisplay(payload.mokan) || '';
+    } else if (src.includes('death cert')) {
+      if (!dc && /^\d{2}-\d{1,4}$/.test(cn)) dc = cn;
+    }
+  }
+  return { cremation, mokan, dc };
+}
+
+// The three documentation-number milestone states (override-or-source), for the Deceased cell.
+function effectiveCaseRefs(record: CaseRecord, overrides: IdentityRefOverrideMap): MilestoneState[] {
+  return IDENTITY_REF_DEFS.map((def) => effectiveMilestone(record, def, overrides));
+}
+
 function DeceasedCell({
   record,
-  contactOverrides,
+  identityRefOverrides,
   onOpen,
 }: {
   record: CaseRecord;
-  contactOverrides: ContactOverrideMap;
+  identityRefOverrides: IdentityRefOverrideMap;
   onOpen: () => void;
 }) {
-  const effective = effectiveFamilyContact(record, contactOverrides);
-  const contact = contactGridText(effective);
-  const hasCandidate = !contact && record.contactCandidates.length > 0;
-  const infoLabel = contact
-    ? effective?.overridden
-      ? 'Staff contact'
-      : 'Source contact'
-    : hasCandidate
-      ? 'Candidate'
-      : 'Source coverage';
-  const infoName = contact?.primary ||
-    (hasCandidate ? record.contactCandidates[0].name : `${record.items.length} linked row${record.items.length === 1 ? '' : 's'}`);
-  const infoSecondary = contact?.secondary ||
-    (hasCandidate
-      ? [record.contactCandidates[0].relationship, record.contactCandidates[0].phone, record.contactCandidates[0].email].filter(Boolean).join(' · ')
-      : [
-          primaryCaseRef(record) ? `GG ref ${primaryCaseRef(record)}` : '',
-          record.mediaMatches.length ? `${record.mediaMatches.length} media match${record.mediaMatches.length === 1 ? '' : 'es'}` : '',
-          record.primaryItem.source,
-        ].filter(Boolean).join(' · '));
-  const contactTone = contact
-    ? effective?.overridden
-      ? 'border-[#efb70c]/70 bg-[#fff7d7] text-neutral-950'
-      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-    : hasCandidate
-      ? 'border-blue-200 bg-blue-50 text-blue-800'
-      : 'border-neutral-200 bg-neutral-50 text-neutral-700';
+  const refs = effectiveCaseRefs(record, identityRefOverrides);
 
   return (
     <button
@@ -2465,10 +2485,15 @@ function DeceasedCell({
             </div>
           </div>
         </div>
-        <div className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${contactTone}`}>
-          <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{infoLabel}</div>
-          <div className="truncate">{infoName}</div>
-          {infoSecondary ? <div className="truncate text-[10px] font-normal opacity-80">{infoSecondary}</div> : null}
+        <div className="grid grid-cols-3 gap-1">
+          {refs.map((state) => (
+            <div key={state.def.key} className={`min-w-0 rounded-md border px-1.5 py-1 font-semibold ${milestoneCellTone(state)}`}>
+              <div className="truncate text-[9px] uppercase tracking-wide opacity-70">{state.def.label}</div>
+              <div className={`truncate ${state.state === 'empty' || state.state === 'na' ? 'italic' : ''}`}>
+                {state.state === 'empty' ? '...' : state.state === 'na' ? 'N/A' : state.value}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </button>
@@ -3789,7 +3814,7 @@ export default function BoardPage() {
                     <span className="text-neutral-300">—</span>
                   )}
                 </div>
-                <DeceasedCell record={record} contactOverrides={contactOverrides} onOpen={() => setSelectedKey(record.key)} />
+                <DeceasedCell record={record} identityRefOverrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 <div className="px-1 py-1.5">
                   <MilestoneChips record={record} defs={DATE_MILESTONES} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>

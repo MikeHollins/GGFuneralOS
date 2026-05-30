@@ -12,6 +12,10 @@ const MILESTONE_KEYS = new Set([
   'service_location',
   'cremation_location',
   'burial_location',
+  'service_type',
+  'cremation_number',
+  'mokan_number',
+  'dc_number',
 ]);
 
 export async function GET() {
