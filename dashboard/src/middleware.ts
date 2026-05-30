@@ -19,7 +19,9 @@ function publicApi(pathname: string) {
     pathname === '/api/auth/login' ||
     pathname === '/api/auth/logout' ||
     pathname === '/api/auth/claim' ||
-    pathname === '/api/auth/bootstrap-owner'
+    pathname === '/api/auth/bootstrap-owner' ||
+    // Scheduled cron routes carry no staff session; they gate themselves with CRON_SECRET.
+    pathname.startsWith('/api/cron/')
   );
 }
 
