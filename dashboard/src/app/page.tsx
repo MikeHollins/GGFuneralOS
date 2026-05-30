@@ -219,7 +219,13 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 
 // Structured scheduling/location milestones shown as compact grid slots and edited in the
 // drawer. Source-derived values are the default; staff overrides (incl. N/A) live in Neon.
-type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location'; areas: OperationArea[]; sourceKeys: string[] };
+type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location' | 'select'; areas: OperationArea[]; sourceKeys: string[]; options?: string[] };
+
+// Golden Gate's service packages (from kcgoldengate.com/our-packages), cremation-tier first.
+const GG_SERVICE_OPTIONS = [
+  'Direct Cremation', 'The Direct', 'The Memorial', 'The Noble', 'The Formal',
+  'The Prestige', 'The Gold', 'The Imperial', 'The Royal',
+];
 // areas: only pull this milestone's source value from rows of the relevant area (so a
 // cremation date can't come from a service row, etc.). Date slots use date columns only
 // (times are excluded — combining date+time is a future step).
@@ -234,7 +240,10 @@ const LOCATION_MILESTONES: MilestoneDef[] = [
   { key: 'cremation_location', label: 'Cremation', full: 'Cremation location', kind: 'location', areas: ['crematory', 'cremains'], sourceKeys: ['crematory', 'crematory_name'] },
   { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', areas: ['service'], sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
 ];
-const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES];
+const SERVICE_MILESTONES: MilestoneDef[] = [
+  { key: 'service_type', label: 'Service', full: 'Service / package', kind: 'select', areas: ['arrangement', 'service'], sourceKeys: ['service_type', 'package', 'disposition_type', 'contract_type'], options: GG_SERVICE_OPTIONS },
+];
+const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_MILESTONES];
 
 type MilestoneOverride = { value: string; isNa: boolean; initials: string };
 type MilestoneOverrideMap = Record<string, Record<string, MilestoneOverride>>;
@@ -1125,16 +1134,29 @@ function MilestoneField({ record, def, overrides, onCommit }: { record: CaseReco
     <div className="rounded-md border border-[#efb70c]/40 bg-[#fffaf0] p-2 text-xs">
       <div className="font-semibold text-neutral-500">{def.full}</div>
       {source ? <div className="truncate text-[10px] text-neutral-400">Source: {source}</div> : null}
-      <input
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') setEditing(false);
-        }}
-        placeholder={def.kind === 'date' ? 'MM/DD/YYYY or Jun 3, 2026' : 'Location'}
-        className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
-        autoFocus
-      />
+      {def.kind === 'select' ? (
+        <select
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Escape') setEditing(false); }}
+          className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+          autoFocus
+        >
+          <option value="">Select a service…</option>
+          {(def.options ?? []).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+        </select>
+      ) : (
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setEditing(false);
+          }}
+          placeholder={def.kind === 'date' ? 'MM/DD/YYYY or Jun 3, 2026' : 'Location'}
+          className="mt-1 h-8 w-full rounded-md border border-neutral-300 px-2 text-sm outline-none focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20"
+          autoFocus
+        />
+      )}
       <div className="mt-2 flex flex-wrap gap-1">
         <button type="button" disabled={busy} onClick={() => run(draft, false, true)} className="h-7 rounded-md bg-black px-2 font-semibold text-[#efb70c] disabled:opacity-60">Save</button>
         <button type="button" disabled={busy} onClick={() => run('', true, true)} className="h-7 rounded-md bg-neutral-200 px-2 font-semibold text-neutral-700 disabled:opacity-60">N/A</button>
