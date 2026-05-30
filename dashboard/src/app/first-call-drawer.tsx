@@ -107,10 +107,10 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
         role="dialog"
         aria-modal="true"
         aria-label="New first call intake"
-        className="flex h-dvh w-[560px] max-w-[96vw] flex-col border-l border-neutral-200 bg-white shadow-2xl"
+        className="flex h-dvh w-full flex-col border-l border-neutral-200 bg-white shadow-2xl sm:w-[560px] sm:max-w-[96vw]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-3 py-3 sm:px-4">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wide text-red-700">New first call</div>
             <h2 className="text-lg font-bold text-neutral-950">Open a case</h2>
@@ -118,14 +118,14 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           <button type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">Close</button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 sm:px-4">
           <p className="mt-2 rounded-md bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500">
             Capture the essentials to get the deceased into care and start the legal clock. Full arrangement detail comes at the arrangement conference.
           </p>
 
           <SectionTitle n={1}>The deceased</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="col-span-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="sm:col-span-2">
               <Field label="Case number (suggested — edit if Golden Gate is on a different one)" value={val('case_number')} onChange={upd('case_number')} placeholder="YY-NNN" />
             </div>
             <Field label="First name" value={val('deceased_first')} onChange={upd('deceased_first')} />
@@ -139,10 +139,10 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           </div>
 
           <SectionTitle n={2}>Place of death / location of body</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Select label="Where" value={val('death_place_type')} onChange={upd('death_place_type')} options={[['', '—'], ['home', 'Home'], ['hospital', 'Hospital'], ['hospice', 'Hospice'], ['nursing_facility', 'Nursing facility'], ['medical_examiner', 'Medical examiner'], ['other', 'Other']]} />
             <Field label="Facility name" value={val('death_facility_name')} onChange={upd('death_facility_name')} />
-            <div className="col-span-2"><Field label="Address" value={val('death_address')} onChange={upd('death_address')} /></div>
+            <div className="sm:col-span-2"><Field label="Address" value={val('death_address')} onChange={upd('death_address')} /></div>
             <Field label="Pronounced by" value={val('pronounced_by')} onChange={upd('pronounced_by')} placeholder="Physician / coroner" />
             <div className="flex flex-col justify-end gap-0.5">
               <Check label="Death pronounced" checked={!!f.pronounced} onChange={upd('pronounced')} />
@@ -151,11 +151,11 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           </div>
 
           <SectionTitle n={3}>Caller &amp; legal next of kin</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Field label="Caller name" value={val('caller_name')} onChange={upd('caller_name')} />
             <Field label="Caller phone" type="tel" value={val('caller_phone')} onChange={upd('caller_phone')} />
             <Field label="Caller relationship" value={val('caller_relationship')} onChange={upd('caller_relationship')} />
-            <div />
+            <div className="hidden sm:block" />
             <Field label="Next of kin (legal)" value={val('nok_name')} onChange={upd('nok_name')} required />
             <Field label="NOK relationship" value={val('nok_relationship')} onChange={upd('nok_relationship')} />
             <Field label="NOK phone" type="tel" value={val('nok_phone')} onChange={upd('nok_phone')} />
@@ -163,8 +163,8 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           </div>
 
           <SectionTitle n={4}>Removal / transfer</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="col-span-2"><Field label="Pickup location" value={val('pickup_location')} onChange={upd('pickup_location')} placeholder="Same as place of death, or address" /></div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="sm:col-span-2"><Field label="Pickup location" value={val('pickup_location')} onChange={upd('pickup_location')} placeholder="Same as place of death, or address" /></div>
             <Select label="Permission to embalm" value={val('embalm_permission')} onChange={upd('embalm_permission')} options={[['pending', 'Pending'], ['yes', 'Granted'], ['no', 'Declined']]} />
             <Field label="Removal team" value={val('removal_team')} onChange={upd('removal_team')} />
             <div className="flex flex-col justify-end gap-0.5">
@@ -174,22 +174,22 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           </div>
 
           <SectionTitle n={5}>Disposition intent</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Select label="Intent (preliminary)" value={val('disposition_intent')} onChange={upd('disposition_intent')} options={[['undecided', 'Undecided'], ['burial', 'Burial'], ['cremation', 'Cremation']]} />
             {isCremation ? (
               <Select label="Pacemaker / implant?" value={val('pacemaker_present')} onChange={upd('pacemaker_present')} options={[['unknown', 'Unknown'], ['yes', 'Yes — must remove'], ['no', 'No']]} />
-            ) : <div />}
-            <div className="col-span-2"><Check label="Prearrangement on file" checked={!!f.prearrangement} onChange={upd('prearrangement')} /></div>
+            ) : <div className="hidden sm:block" />}
+            <div className="sm:col-span-2"><Check label="Prearrangement on file" checked={!!f.prearrangement} onChange={upd('prearrangement')} /></div>
           </div>
           {isCremation && val('pacemaker_present') === 'yes' ? (
             <p className="rounded-md bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700">Pacemaker present — must be removed before cremation.</p>
           ) : null}
 
           <SectionTitle n={6}>Next step</SectionTitle>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Field label="Arrangement conference" type="datetime-local" value={val('arrangement_conference_at')} onChange={upd('arrangement_conference_at')} />
             <Field label="Director assigned" value={val('director_assigned')} onChange={upd('director_assigned')} />
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="block">
                 <span className="text-[11px] font-semibold text-neutral-600">Notes / special instructions</span>
                 <textarea value={val('notes')} onChange={(e) => upd('notes')(e.target.value)} rows={2}
@@ -199,7 +199,7 @@ export function FirstCallDrawer({ onClose, onCreated }: { onClose: () => void; o
           </div>
         </div>
 
-        <div className="border-t border-neutral-200 px-4 py-3">
+        <div className="border-t border-neutral-200 px-3 py-3 sm:px-4">
           {error ? <div className="mb-2 rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">{error}</div> : null}
           <div className="flex items-center gap-2">
             <input

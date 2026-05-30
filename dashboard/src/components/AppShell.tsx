@@ -14,6 +14,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <main className="min-w-0 flex-1 overflow-auto">{children}</main>
+    <main data-dashboard-scroll-root className="min-w-0 flex-1 overflow-auto">{children}</main>
   );
 }
