@@ -160,28 +160,27 @@ async function main() {
 
   await waitForDashboardRows(page);
 
-  await check('header is compact and uses requested labels', async () => {
+  await check('header is compact and uses current operational labels', async () => {
     await expectText(page, 'Golden Gate Dashboard');
-    await expectText(page, 'Active Cases');
-    await expectText(page, 'All Cases');
+    await expectText(page, 'Recent First Calls');
     await expectText(page, 'Calendar');
-    await expectText(page, 'First calls today');
-    await expectText(page, 'Services this month');
+    await expectText(page, 'Cases this month');
+    await expectText(page, 'Cases this year');
     await expectNoText(page, 'Categories');
     await expectNoText(page, 'Filter by category');
-    await expectNoExactText(page, 'Services month');
-    await expectNoExactText(page, 'Calls today');
+    await expectNoText(page, 'Active Cases');
+    await expectNoText(page, 'All Cases');
   });
 
-  await check('payments remains a live header link', async () => {
-    const payments = page.getByRole('link', { name: /^Payments$/ });
-    await payments.waitFor({ timeout: 5000 });
-    assert(await payments.count() === 1, 'expected live Payments link');
-    await expectNoText(page, 'Payments soon');
+  await check('texts and payments remain visibly gated', async () => {
+    await expectText(page, 'Texts');
+    await expectText(page, 'Payments');
+    await expectText(page, 'soon');
+    assert(await page.getByRole('link', { name: /^Payments$/ }).count() === 0, 'Payments should not be a live link until connected');
   });
 
   await check('grid column titles are centered', async () => {
-    for (const label of ['Deceased', 'Date / Time', 'Location', 'Status']) {
+    for (const label of ['GG Case Number', 'Deceased', 'Schedule & Location', 'Status']) {
       const header = page.locator('main section > div').first().getByText(label, { exact: true });
       await header.waitFor({ timeout: 5000 });
       const align = await header.evaluate((node) => getComputedStyle(node).textAlign);
@@ -201,7 +200,7 @@ async function main() {
     assert(!/Contact needed/i.test(gridText), 'deceased cell still says Contact needed');
     assert(/\bDOB\b/.test(gridText), 'DOB slot missing from deceased cell');
     assert(/\bTransition\b/i.test(gridText), 'Transition slot missing from deceased cell');
-    assert(/Source coverage|Staff contact|Source contact|Candidate/i.test(gridText), 'deceased cell does not show source/contact coverage');
+    assert(/Cremation #|MoKan #|DC Case/i.test(gridText), 'deceased cell does not show case-reference evidence');
   });
 
   await check('priority designations are absent from dashboard surface', async () => {
@@ -222,7 +221,7 @@ async function main() {
 
   await check('calendar events open the family drawer when available', async () => {
     await page.getByRole('button', { name: /^month$/i }).click();
-    const eventButton = page.locator('button[data-case-calendar-event="true"]').first();
+    const eventButton = page.locator('button[data-case-calendar-event="true"]:visible').first();
     if (!(await eventButton.count())) {
       record('calendar event drawer open', 'skip', 'no dated calendar events rendered in current data window');
       return;
@@ -233,8 +232,8 @@ async function main() {
     await page.getByRole('button', { name: /^Close$/ }).click();
   });
 
-  await check('row click opens drawer with one controlled content scroll plus sticky source rail', async () => {
-    await page.getByRole('button', { name: /^Active Cases$/ }).click();
+  await check('row click opens drawer with one controlled content scroll plus compact source evidence button', async () => {
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await waitForDashboardRows(page);
     const row = page.locator('main [role="button"][aria-label^="Open details for"]').first();
     await row.waitFor({ timeout: 15000 });
@@ -242,8 +241,7 @@ async function main() {
     const drawer = page.getByRole('dialog');
     await drawer.waitFor({ timeout: 10000 });
     await expectText(page, 'Family detail');
-    await expectText(page, 'Master sheet at a glance');
-    await expectText(page, 'Sources');
+    await page.getByRole('button', { name: /^Source evidence$/ }).waitFor({ timeout: 5000 });
     const firstPaintText = await drawer.innerText();
     assert(!/Loading all linked rows and files/i.test(firstPaintText), 'drawer blocks on linked rows/files loading message');
     const drawerScrollInfo = await drawer.evaluate((node) => {
@@ -271,6 +269,7 @@ async function main() {
 
   await check('source diagnostics are subtle in drawer and not consuming header space', async () => {
     await expectNoLocator(page, 'header >> text=Sources');
+    await page.getByRole('button', { name: /^Source evidence$/ }).click();
     await expectText(page, 'Sources');
   });
 

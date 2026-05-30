@@ -2321,6 +2321,41 @@ function CalendarEventPill({ event, onOpen }: { event: CaseCalendarEvent; onOpen
   );
 }
 
+function CalendarAgendaList({
+  days,
+  eventsByDay,
+  onOpenCase,
+  emptyText,
+}: {
+  days: Date[];
+  eventsByDay: Map<string, CaseCalendarEvent[]>;
+  onOpenCase: (caseKey: string) => void;
+  emptyText: string;
+}) {
+  const populatedDays = days
+    .map((day) => ({ day, events: eventsByDay.get(calendarDateKey(day)) ?? [] }))
+    .filter(({ events }) => events.length > 0);
+
+  if (!populatedDays.length) {
+    return <div className="rounded-md bg-neutral-50 px-3 py-6 text-center text-sm italic text-neutral-400">{emptyText}</div>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {populatedDays.map(({ day, events }) => (
+        <section key={calendarDateKey(day)} className="rounded-md border border-neutral-200 bg-white p-2">
+          <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-neutral-500">
+            {day.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+          </div>
+          <div className="space-y-1.5">
+            {events.map((event) => <CalendarEventPill key={event.id} event={event} onOpen={onOpenCase} />)}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function googleCalendarEventsFor(events: GoogleCalendarEvent[]): CaseCalendarEvent[] {
   return events.flatMap((event) => {
       const date = new Date(event.start);
@@ -2416,26 +2451,28 @@ function CalendarBoard({
             href={googleCalendarUrl}
             target="_blank"
             rel="noreferrer"
-            className="h-8 rounded-md border border-neutral-200 px-2 py-2 text-xs font-bold leading-none text-neutral-700 hover:bg-neutral-50"
+            className="h-8 rounded-md border border-neutral-200 px-2 py-2 text-xs font-bold leading-none text-neutral-700 hover:bg-neutral-50 max-sm:order-3 max-sm:w-full max-sm:text-center"
           >
             Open Google Calendar
           </a>
         ) : null}
-        <div className="flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5">
+        <div className="flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5 max-sm:order-2 max-sm:w-full">
           {(['day', 'week', 'month', 'year'] as CalendarMode[]).map((nextMode) => (
             <button
               key={nextMode}
               type="button"
               onClick={() => setMode(nextMode)}
-              className={`h-7 rounded px-2 text-[11px] font-bold capitalize ${mode === nextMode ? 'bg-black text-[#efb70c]' : 'text-neutral-600 hover:bg-white'}`}
+              className={`h-7 flex-1 rounded px-2 text-[11px] font-bold capitalize ${mode === nextMode ? 'bg-black text-[#efb70c]' : 'text-neutral-600 hover:bg-white'}`}
             >
               {nextMode}
             </button>
           ))}
         </div>
-        <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, -1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Prev</button>
-        <button type="button" onClick={() => setFocusDate(new Date())} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Current</button>
-        <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, 1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50">Next</button>
+        <div className="flex gap-2 max-sm:order-4 max-sm:w-full">
+          <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, -1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50 max-sm:flex-1">Prev</button>
+          <button type="button" onClick={() => setFocusDate(new Date())} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50 max-sm:flex-1">Current</button>
+          <button type="button" onClick={() => setFocusDate((date) => shiftCalendarDate(date, mode, 1))} className="h-8 rounded-md border border-neutral-200 px-2 text-xs font-bold text-neutral-600 hover:bg-neutral-50 max-sm:flex-1">Next</button>
+        </div>
       </div>
 
       <div className="px-3 py-2 text-sm font-bold text-neutral-800">{calendarTitle(mode, focusDate)}</div>
@@ -2458,7 +2495,7 @@ function CalendarBoard({
       ) : null}
 
       {mode === 'week' ? (
-        <div className="grid gap-px bg-neutral-200 md:grid-cols-7">
+        <div className="hidden gap-px bg-neutral-200 md:grid md:grid-cols-7">
           {weekDays.map((day) => {
             const key = calendarDateKey(day);
             return (
@@ -2475,8 +2512,19 @@ function CalendarBoard({
         </div>
       ) : null}
 
+      {mode === 'week' ? (
+        <div className="px-3 pb-3 md:hidden">
+          <CalendarAgendaList
+            days={weekDays}
+            eventsByDay={eventsByDay}
+            onOpenCase={onOpenCase}
+            emptyText="No dated case milestones found for this week."
+          />
+        </div>
+      ) : null}
+
       {mode === 'month' ? (
-        <div className="grid grid-cols-7 gap-px bg-neutral-200">
+        <div className="hidden grid-cols-7 gap-px bg-neutral-200 md:grid">
           {monthDays.map((day) => {
             const key = calendarDateKey(day);
             const dayEvents = eventsByDay.get(key) ?? [];
@@ -2491,6 +2539,17 @@ function CalendarBoard({
               </div>
             );
           })}
+        </div>
+      ) : null}
+
+      {mode === 'month' ? (
+        <div className="px-3 pb-3 md:hidden">
+          <CalendarAgendaList
+            days={monthDays.filter((day) => day.getMonth() === focusDate.getMonth())}
+            eventsByDay={eventsByDay}
+            onOpenCase={onOpenCase}
+            emptyText="No dated case milestones found for this month."
+          />
         </div>
       ) : null}
 
@@ -2560,6 +2619,27 @@ function effectiveCaseRefs(record: CaseRecord, overrides: IdentityRefOverrideMap
   return IDENTITY_REF_DEFS.map((def) => effectiveMilestone(record, def, overrides));
 }
 
+function CaseNumberCell({ record }: { record: CaseRecord }) {
+  const caseRef = canonicalCaseRef(record);
+  const isFirstCall = record.items.some((item) => item.source === 'First Call');
+  const value = caseRef || (isFirstCall ? 'New' : 'No #');
+
+  return (
+    <div className="flex min-w-0 items-center px-2 py-1.5 font-mono text-[11px] text-neutral-600 max-lg:flex-col max-lg:items-start max-lg:justify-start max-lg:gap-1 max-lg:border-l-4 max-lg:border-l-neutral-400 max-lg:bg-white max-lg:text-neutral-950 lg:items-center">
+      <span className="hidden text-[8px] font-black uppercase leading-none tracking-wide text-neutral-500 max-lg:block">Case #</span>
+      {caseRef ? (
+        <span className="min-w-0 break-words text-[11px] font-black leading-tight text-neutral-900 max-lg:text-[12px]" title="Golden Gate case number — the Death Certificate 'Case' number when one exists, else the Crematory Log number (each log runs its own per-year sequence)">
+          {value}
+        </span>
+      ) : isFirstCall ? (
+        <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-black uppercase text-amber-800">New</span>
+      ) : (
+        <span className="text-[10px] font-black uppercase leading-tight text-neutral-500 max-lg:text-[11px]">No #</span>
+      )}
+    </div>
+  );
+}
+
 function DeceasedCell({
   record,
   identityRefOverrides,
@@ -2578,7 +2658,7 @@ function DeceasedCell({
         event.stopPropagation();
         onOpen();
       }}
-      className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7]"
+      className="min-w-0 border-l-4 border-l-neutral-300 px-2 py-1.5 text-left outline-none transition focus:border-l-[#efb70c] focus:bg-[#fff7d7] max-lg:border-l-0"
       aria-label={`Open details for ${record.name}`}
     >
       <div className="truncate text-sm font-bold text-neutral-950">{record.name}</div>
@@ -3136,12 +3216,12 @@ function DetailDrawer({
       <aside
         role="dialog"
         aria-modal="true"
-        className="relative h-dvh w-[95vw] max-w-[1840px] overflow-hidden border-l border-neutral-200 bg-white shadow-2xl max-sm:w-[98vw]"
+        className="relative flex h-dvh w-[95vw] max-w-[1840px] flex-col overflow-hidden border-l border-neutral-200 bg-white shadow-2xl max-sm:w-[98vw]"
         onClick={(event) => event.stopPropagation()}
         aria-label={`Details for ${record.name}`}
       >
-        <div className="border-b border-neutral-200 bg-white px-5 py-3">
-          <div className="flex items-start justify-between gap-4">
+        <div className="border-b border-neutral-200 bg-white px-3 py-3 sm:px-5">
+          <div className="flex flex-wrap items-start justify-between gap-3 sm:gap-4">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a77d00]">Family detail</div>
               <h2 className="mt-1 truncate text-xl font-bold text-neutral-950">{record.name}</h2>
@@ -3170,23 +3250,23 @@ function DetailDrawer({
                 )}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2 max-sm:w-full">
               <button
                 type="button"
                 onClick={() => setSourceEvidenceOpen((open) => !open)}
-                className="h-8 rounded-md border border-neutral-200 px-2.5 text-xs font-bold text-neutral-500 hover:bg-neutral-100"
+                className="h-8 rounded-md border border-neutral-200 px-2.5 text-xs font-bold text-neutral-500 hover:bg-neutral-100 max-sm:flex-1"
                 aria-expanded={sourceEvidenceOpen}
               >
                 Source evidence
               </button>
-              <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100">
+              <button ref={closeButtonRef} type="button" onClick={onClose} className="h-8 rounded-md border border-neutral-200 px-3 text-xs font-bold text-neutral-600 hover:bg-neutral-100 max-sm:flex-1">
                 Close
               </button>
             </div>
           </div>
         </div>
         {sourceEvidenceOpen ? (
-          <div className="absolute right-4 top-[72px] z-50 h-[min(760px,calc(100dvh-96px))] w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl">
+          <div className="absolute right-4 top-[72px] z-50 h-[min(760px,calc(100dvh-96px))] w-[min(420px,calc(100vw-32px))] overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl max-sm:inset-x-3 max-sm:top-[132px] max-sm:w-auto">
             <SourceAtGlance
               record={record}
               sources={sources}
@@ -3200,7 +3280,7 @@ function DetailDrawer({
 
         {/* The overlay/body never scrolls behind the drawer. The content pane owns one
             controlled scroll path so expanded sections remain reachable on short screens. */}
-        <div className="h-[calc(100dvh-73px)] overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <div className="h-full min-h-0 space-y-2 overflow-y-auto px-3 pb-3 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
@@ -3271,9 +3351,67 @@ export default function BoardPage() {
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [firstCallOpen, setFirstCallOpen] = useState(false);
+  const [mobileHeaderVisible, setMobileHeaderVisible] = useState(true);
   const operationsRequestRef = useRef(0);
   const detailFetchedKeysRef = useRef<Set<string>>(new Set());
   const detailRequestRef = useRef(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+
+    const resetScroll = () => {
+      window.scrollTo({ top: 0, left: 0 });
+      document.querySelector<HTMLElement>('[data-dashboard-scroll-root]')?.scrollTo({ top: 0, left: 0 });
+    };
+
+    resetScroll();
+    const frame = window.requestAnimationFrame(resetScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 639px)');
+    const scrollRoot = document.querySelector<HTMLElement>('[data-dashboard-scroll-root]');
+    if (!scrollRoot) return;
+
+    let lastTop = scrollRoot.scrollTop;
+    let ticking = false;
+
+    const syncHeader = () => {
+      ticking = false;
+      if (!media.matches) {
+        setMobileHeaderVisible(true);
+        lastTop = scrollRoot.scrollTop;
+        return;
+      }
+
+      const top = scrollRoot.scrollTop;
+      const delta = top - lastTop;
+      if (top <= 8) setMobileHeaderVisible(true);
+      else if (delta > 6) setMobileHeaderVisible(false);
+      else if (delta < -4) setMobileHeaderVisible(true);
+      lastTop = top;
+    };
+
+    const requestSync = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(syncHeader);
+    };
+
+    scrollRoot.addEventListener('scroll', requestSync, { passive: true });
+    media.addEventListener('change', requestSync);
+    requestSync();
+    return () => {
+      scrollRoot.removeEventListener('scroll', requestSync);
+      media.removeEventListener('change', requestSync);
+    };
+  }, []);
 
   useEffect(() => {
     const syncView = () => {
@@ -3790,9 +3928,9 @@ export default function BoardPage() {
 
   return (
     <div className="h-full bg-[#faf9f9] text-neutral-950">
-      <header className="sticky top-0 z-20 border-b border-neutral-200 bg-white">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-          <div className="flex min-w-0 items-center gap-2">
+      <header className={`sticky top-0 z-20 border-b border-neutral-200 bg-white transition-transform duration-200 ease-out sm:translate-y-0 ${mobileHeaderVisible ? 'translate-y-0' : '-translate-y-full'}`}>
+        <div className="flex flex-wrap items-center gap-1 px-2 py-1.5 sm:gap-2 sm:px-3 sm:py-2">
+          <div className="flex min-w-0 items-center gap-2 max-sm:flex-1">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white p-1">
               <img src="/brand/gg-logo.png" alt="Golden Gate Funeral & Cremation Services" className="max-h-full max-w-full object-contain" />
             </div>
@@ -3800,34 +3938,38 @@ export default function BoardPage() {
               <h1 className="truncate text-lg font-bold text-black">Golden Gate Dashboard</h1>
             </button>
           </div>
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="grid grid-cols-2 gap-1 sm:hidden">
+            <HeaderMetric label="Cases this month" value={casesThisMonth} />
+            <HeaderMetric label="Cases this year" value={casesThisYear} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1 max-sm:order-3 max-sm:w-full max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:pb-0.5">
             <button
               type="button"
               onClick={() => setFirstCallOpen(true)}
-              className="h-8 rounded-md bg-red-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-red-700"
+              className="h-8 rounded-md bg-red-600 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-red-700 max-sm:shrink-0"
             >
               + New First Call
             </button>
-            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
+            <span className="mx-1 h-8 border-l border-neutral-200 max-sm:hidden" aria-hidden="true" />
             {primaryViews.map((view) => (
               <button
                 key={view}
                 type="button"
                 onClick={() => chooseView(view)}
-                className={`h-8 rounded-md px-2.5 text-xs font-bold transition ${
+                className={`h-8 rounded-md px-2.5 text-xs font-bold transition max-sm:shrink-0 ${
                   activeView === view ? 'bg-black text-[#efb70c]' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
                 {viewLabels[view]}
               </button>
             ))}
-            <span className="mx-1 h-8 border-l border-neutral-200" aria-hidden="true" />
+            <span className="mx-1 h-8 border-l border-neutral-200 max-sm:hidden" aria-hidden="true" />
             {appTopLinks.map((link) =>
               link.ready ? (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+                  className="flex h-8 items-center rounded-md px-2.5 text-xs font-bold text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950 max-sm:shrink-0"
                 >
                   {link.label}
                 </Link>
@@ -3841,8 +3983,15 @@ export default function BoardPage() {
                 </span>
               ),
             )}
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search family"
+              className="sticky right-0 z-10 h-8 w-28 shrink-0 rounded-md border border-neutral-200 bg-neutral-50 px-2 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-[#efb70c] focus:ring-2 focus:ring-[#efb70c]/20 sm:hidden"
+              aria-label="Search any field — name, case number, dates, location, service crew & details"
+            />
           </div>
-          <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2">
+          <div className="ml-auto flex min-w-[190px] items-center justify-end gap-2 max-sm:hidden">
             <span className="hidden whitespace-nowrap text-[11px] font-semibold text-neutral-500 2xl:inline">{visibleSummary}</span>
             <div className="hidden items-center gap-1 lg:flex">
               <HeaderMetric label="Cases this month" value={casesThisMonth} />
@@ -3856,10 +4005,14 @@ export default function BoardPage() {
               aria-label="Search any field — name, case number, dates, location, service crew & details"
             />
           </div>
+          <div className="hidden w-full grid-cols-2 gap-1 sm:grid lg:hidden">
+            <HeaderMetric label="Cases this month" value={casesThisMonth} />
+            <HeaderMetric label="Cases this year" value={casesThisYear} />
+          </div>
         </div>
       </header>
 
-      <main className="p-3">
+      <main className="p-2 sm:p-3">
         {activeView === 'calendar' ? (
           <CalendarBoard records={caseRecords} milestoneOverrides={milestoneOverrides} onOpenCase={setSelectedKey} />
         ) : (
@@ -3892,31 +4045,23 @@ export default function BoardPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:block"
+                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:grid-cols-[104px_minmax(0,1fr)]"
                 aria-label={`Open details for ${record.name}`}
               >
-                <div className="flex items-center px-2 py-1.5 font-mono text-[11px] text-neutral-500 max-lg:hidden">
-                  {canonicalCaseRef(record) ? (
-                    <span title="Golden Gate case number — the Death Certificate 'Case' number when one exists, else the Crematory Log number (each log runs its own per-year sequence)">
-                      {canonicalCaseRef(record)}
-                    </span>
-                  ) : record.items.some((item) => item.source === 'First Call') ? (
-                    <span className="rounded bg-amber-50 px-1 py-0.5 text-[10px] font-bold uppercase text-amber-800">New</span>
-                  ) : (
-                    <span className="text-neutral-300">—</span>
-                  )}
-                </div>
+                <CaseNumberCell record={record} />
                 <DeceasedCell record={record} identityRefOverrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
-                <div className="px-1 py-1.5">
+                <div className="px-1 py-1.5 max-lg:col-span-2">
                   <ScheduleCell record={record} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
                 </div>
-                <WorkflowProgressCell
-                  record={record}
-                  states={workflowStateByKey.get(record.key) ?? []}
-                  statusOverrides={statusOverrides}
-                  onToggleStep={commitWorkflowStep}
-                  onOpenDetails={() => setSelectedKey(record.key)}
-                />
+                <div className="max-lg:col-span-2">
+                  <WorkflowProgressCell
+                    record={record}
+                    states={workflowStateByKey.get(record.key) ?? []}
+                    statusOverrides={statusOverrides}
+                    onToggleStep={commitWorkflowStep}
+                    onOpenDetails={() => setSelectedKey(record.key)}
+                  />
+                </div>
               </div>
             )) : (
               <div className="px-4 py-12 text-center text-sm text-neutral-500">

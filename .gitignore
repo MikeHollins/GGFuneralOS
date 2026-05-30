@@ -4,3 +4,5 @@ dist/
 *.db
 .DS_Store
 website-clone/
+*.tsbuildinfo
+.claude/
