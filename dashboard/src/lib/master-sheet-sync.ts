@@ -94,7 +94,7 @@ const sheetConfigs: SheetConfig[] = [
   {
     sheet: '2026 Crematory Log',
     area: 'crematory',
-    labelKeys: ['name_of_deceased', 'deceased', 'name'],
+    labelKeys: ['name_of_deceased', 'deceased_name_last_first', 'deceased', 'name'],
     dueKeys: ['cremation_date', 'date', 'date_of_cremation', 'return_date'],
     ownerKeys: ['operator', 'staff', 'director'],
     defaultOwner: 'Crematory',
@@ -103,7 +103,7 @@ const sheetConfigs: SheetConfig[] = [
   {
     sheet: 'Belongings',
     area: 'belongings',
-    labelKeys: ['name_of_deceased', 'deceased', 'name'],
+    labelKeys: ['name_of_deceased', 'deceased', 'deseased', 'name'],
     dueKeys: ['pick_up_date', 'pickup_date', 'date', 'release_date'],
     ownerKeys: ['receiver', 'released_to', 'staff'],
     defaultOwner: 'Front desk',
@@ -130,7 +130,7 @@ const sheetConfigs: SheetConfig[] = [
   {
     sheet: '2025 Crematory Log',
     area: 'crematory',
-    labelKeys: ['name_of_deceased', 'deceased', 'name'],
+    labelKeys: ['name_of_deceased', 'deceased_name_last_first', 'deceased', 'name'],
     dueKeys: ['cremation_date', 'date', 'date_of_cremation', 'return_date'],
     ownerKeys: ['operator', 'staff', 'director'],
     defaultOwner: 'Crematory',
@@ -148,7 +148,7 @@ const sheetConfigs: SheetConfig[] = [
   {
     sheet: '2024 Running Crematory Log',
     area: 'crematory',
-    labelKeys: ['name_of_deceased', 'deceased', 'name'],
+    labelKeys: ['name_of_deceased', 'deceased_name_last_first', 'deceased', 'name'],
     dueKeys: ['cremation_date', 'date', 'date_of_cremation', 'return_date'],
     ownerKeys: ['operator', 'staff', 'director'],
     defaultOwner: 'Crematory',
@@ -166,7 +166,7 @@ const sheetConfigs: SheetConfig[] = [
   {
     sheet: '2023 Running Crematory Log',
     area: 'crematory',
-    labelKeys: ['name_of_deceased', 'deceased', 'name'],
+    labelKeys: ['name_of_deceased', 'deceased_name_last_first', 'deceased', 'name'],
     dueKeys: ['cremation_date', 'date', 'date_of_cremation', 'return_date'],
     ownerKeys: ['operator', 'staff', 'director'],
     defaultOwner: 'Crematory',
@@ -629,6 +629,14 @@ function labelFor(record: Record<string, string>, config: SheetConfig) {
   );
 }
 
+function hasNamedDeceased(record: Record<string, string>, config: SheetConfig) {
+  const name = first(record, config.labelKeys);
+  if (!name) return false;
+  // Crematory logs often pre-fill future rows with case numbers and MoKan counters before a
+  // deceased is known. A case-number-looking "name" is a placeholder, not a family case.
+  return !CASE_NUMBER_PATTERN.test(name) && !/^\d+(?:\s+\d+)*$/.test(name.trim());
+}
+
 function optionsFor(area: OperationArea) {
   if (area === 'death-cert') return statusOptions.deathCert;
   return statusOptions[area];
@@ -758,6 +766,7 @@ function slug(value: string) {
 // below and reused by first-call intake so originated cases thread with synced rows by the same key.
 
 function recordToItem(record: Record<string, string>, config: SheetConfig): DashboardItem | null {
+  if (config.area === 'crematory' && !hasNamedDeceased(record, config)) return null;
   const label = labelFor(record, config);
   if (!label) return null;
   const due = compact(config.dueKeys.map((key) => record[key]));

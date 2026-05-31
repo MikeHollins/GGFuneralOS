@@ -19,6 +19,20 @@ import {
   type GoogleCalendarEvent,
   type OperationsFeed,
 } from '@/lib/api';
+import {
+  ALL_MILESTONES,
+  ARRANGEMENT_MILESTONES,
+  BELONGINGS_MILESTONES,
+  CREMAINS_MILESTONES,
+  CREMATORY_MILESTONES,
+  DATE_MILESTONES,
+  DEATH_CERT_MILESTONES,
+  IDENTITY_REF_DEFS,
+  LOCATION_MILESTONES,
+  SERVICE_EXTRA_MILESTONES,
+  SERVICE_MILESTONES,
+  type MilestoneDef,
+} from '@/lib/milestone-definitions';
 import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
 import { FirstCallDrawer } from './first-call-drawer';
 
@@ -219,61 +233,14 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
   { label: 'Server folder', keys: ['top_level', 'parent_path', 'relative_path'] },
 ];
 
-// Structured scheduling/location milestones shown as compact grid slots and edited in the
-// drawer. Source-derived values are the default; staff overrides (incl. N/A) live in Neon.
-type MilestoneDef = { key: string; label: string; full: string; kind: 'date' | 'location' | 'select' | 'text'; areas: OperationArea[]; sourceKeys: string[]; options?: string[]; refSource?: 'cremation' | 'mokan' | 'dc' };
-
-// Golden Gate's service packages (from kcgoldengate.com/our-packages), cremation-tier first.
-const GG_SERVICE_OPTIONS = [
-  'Direct Cremation', 'The Direct', 'The Memorial', 'The Noble', 'The Formal',
-  'The Prestige', 'The Gold', 'The Imperial', 'The Royal',
-];
-// areas: only pull this milestone's source value from rows of the relevant area (so a
-// cremation date can't come from a service row, etc.). Date slots use date columns only
-// (times are excluded — combining date+time is a future step).
-const DATE_MILESTONES: MilestoneDef[] = [
-  { key: 'first_call', label: 'Call', full: 'First call', kind: 'date', areas: ['death-cert', 'paperwork'], sourceKeys: ['first_call_date', 'first_call', 'date_received', 'received_date'] },
-  { key: 'service', label: 'Service', full: 'Service', kind: 'date', areas: ['service', 'arrangement'], sourceKeys: ['service_date', 'date'] },
-  { key: 'cremation', label: 'Cremation', full: 'Cremation', kind: 'date', areas: ['crematory', 'cremains'], sourceKeys: ['cremation_date', 'date_of_cremation'] },
-  { key: 'burial', label: 'Burial', full: 'Burial', kind: 'date', areas: ['service'], sourceKeys: ['committal_date', 'burial_date'] },
-];
-const LOCATION_MILESTONES: MilestoneDef[] = [
-  { key: 'service_location', label: 'Service', full: 'Service location', kind: 'location', areas: ['service', 'arrangement'], sourceKeys: ['service_location', 'location', 'chapel', 'church'] },
-  { key: 'cremation_location', label: 'Cremation', full: 'Cremation location', kind: 'location', areas: ['crematory', 'cremains'], sourceKeys: ['crematory', 'crematory_name'] },
-  { key: 'burial_location', label: 'Burial', full: 'Burial location', kind: 'location', areas: ['service'], sourceKeys: ['cemetery', 'cemetery_name', 'committal_location'] },
-];
-const SERVICE_MILESTONES: MilestoneDef[] = [
-  { key: 'service_type', label: 'Service', full: 'Service / package', kind: 'select', areas: ['arrangement', 'service'], sourceKeys: ['service_type', 'package', 'disposition_type', 'contract_type'], options: GG_SERVICE_OPTIONS },
-];
-// Crew + logistics from the Weekly Service Schedule, each its own editable field (text). Source value
-// comes from the matching column on the service row; a staff override persists in case_milestones.
-const SERVICE_EXTRA_MILESTONES: MilestoneDef[] = [
-  { key: 'service_time', label: 'Time', full: 'Service time', kind: 'text', areas: ['service', 'arrangement'], sourceKeys: ['service_time', 'time'] },
-  { key: 'service_lead', label: 'Lead', full: 'Lead director', kind: 'text', areas: ['service'], sourceKeys: ['lead'] },
-  { key: 'service_lady', label: 'Lady', full: 'Lead lady', kind: 'text', areas: ['service'], sourceKeys: ['lady', 'lead_lady'] },
-  { key: 'service_call', label: 'Call', full: 'On-call crew', kind: 'text', areas: ['service'], sourceKeys: ['call'] },
-  { key: 'service_arrival', label: 'Arrival', full: 'Arrival time', kind: 'text', areas: ['service'], sourceKeys: ['arrival'] },
-  { key: 'service_hearse', label: 'Hearse', full: 'Hearse', kind: 'text', areas: ['service'], sourceKeys: ['hearse'] },
-  { key: 'service_limo', label: 'Limo', full: 'Limo', kind: 'text', areas: ['service'], sourceKeys: ['limo'] },
-  { key: 'service_casket', label: 'Casket', full: 'Casket', kind: 'text', areas: ['service'], sourceKeys: ['casket'] },
-  { key: 'service_flowers', label: 'Flowers', full: 'Flowers', kind: 'text', areas: ['service'], sourceKeys: ['flowers'] },
-  { key: 'service_programs', label: 'Programs', full: 'Programs', kind: 'text', areas: ['service'], sourceKeys: ['programs'] },
-];
-const ALL_MILESTONES = [...DATE_MILESTONES, ...LOCATION_MILESTONES, ...SERVICE_MILESTONES, ...SERVICE_EXTRA_MILESTONES];
 const MILESTONE_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
 // Drawer grouping: everything about the service in one editable block; intake/disposition in another.
 const SERVICE_SECTION_KEYS = ['service', 'service_time', 'service_location', 'service_type', 'service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_hearse', 'service_limo', 'service_casket', 'service_flowers', 'service_programs'];
 const NON_SERVICE_MILESTONE_KEYS = ['first_call', 'cremation', 'cremation_location', 'burial', 'burial_location'];
-// Documentation numbers shown in the Deceased cell and editable in the drawer. Their source value is
-// pulled source-aware from the synced Crematory/Death-Certificate rows (see caseRefsFromSource); a
-// staff override persists in case_milestones (overlay table the sync never touches) and wins when set.
-const IDENTITY_REF_DEFS: MilestoneDef[] = [
-  { key: 'cremation_number', label: 'Cremation #', full: 'Cremation case #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: [], refSource: 'cremation' },
-  { key: 'mokan_number', label: 'MoKan #', full: 'MoKan #', kind: 'text', areas: ['crematory', 'cremains'], sourceKeys: ['mokan'], refSource: 'mokan' },
-  // The death-certificate "Case" number IS the GG Case Number (shown in its own column), and Golden
-  // Gate stores no separate DC document number — so there's no DC box here; it would just duplicate
-  // the case number. caseRefsFromSource still reads the stamped dc value to drive canonicalCaseRef.
-];
+const ARRANGEMENT_SECTION_KEYS = ARRANGEMENT_MILESTONES.map((def) => def.key);
+const DEATH_CERT_SECTION_KEYS = DEATH_CERT_MILESTONES.map((def) => def.key);
+const CREMATORY_SECTION_KEYS = CREMATORY_MILESTONES.map((def) => def.key);
+const CREMAINS_BELONGINGS_SECTION_KEYS = [...CREMAINS_MILESTONES, ...BELONGINGS_MILESTONES].map((def) => def.key);
 type IdentityRefOverrideMap = MilestoneOverrideMap;
 
 type MilestoneOverride = { value: string; isNa: boolean; initials: string };
@@ -1306,6 +1273,18 @@ function MilestoneEditor({ record, overrides, onCommit }: { record: CaseRecord; 
       </DrawerDisclosure>
       <DrawerDisclosure title="First call, cremation & burial" meta="Intake and disposition dates & locations" bodyClassName="p-3">
         <MilestoneFields record={record} keys={NON_SERVICE_MILESTONE_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-4" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="Arrangements" meta="Appointment slot and package signals from the staff calendar" bodyClassName="p-3">
+        <MilestoneFields record={record} keys={ARRANGEMENT_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-3" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="Death certificate" meta="Doctor, facility, state, status notes, missing info & pickup tracking" bodyClassName="p-3">
+        <MilestoneFields record={record} keys={DEATH_CERT_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-4" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="Crematory / MoKan" meta="Operator, paperwork, NOK/DPOA, MoKan timing & readiness" bodyClassName="p-3">
+        <MilestoneFields record={record} keys={CREMATORY_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-4" />
+      </DrawerDisclosure>
+      <DrawerDisclosure title="Cremains & belongings" meta="Return, pickup, receiver, urn, paid status, belongings release" bodyClassName="p-3">
+        <MilestoneFields record={record} keys={CREMAINS_BELONGINGS_SECTION_KEYS} overrides={overrides} onCommit={onCommit} cols="sm:grid-cols-2 xl:grid-cols-4" />
       </DrawerDisclosure>
       <DrawerDisclosure title="Case documentation #s" meta="Cremation and MoKan numbers" bodyClassName="p-3">
         <div className="grid gap-2 sm:grid-cols-2">
