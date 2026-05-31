@@ -51,8 +51,11 @@ export const SERVICE_EXTRA_MILESTONES: MilestoneDef[] = [
   { key: 'service_hearse', label: 'Hearse', full: 'Hearse', kind: 'text', areas: ['service'], sourceKeys: ['hearse'] },
   { key: 'service_limo', label: 'Limo', full: 'Limo', kind: 'text', areas: ['service'], sourceKeys: ['limo'] },
   { key: 'service_casket', label: 'Casket', full: 'Casket', kind: 'text', areas: ['service'], sourceKeys: ['casket'] },
+  { key: 'service_color', label: 'Color', full: 'Casket / program color', kind: 'text', areas: ['service'], sourceKeys: ['color'] },
   { key: 'service_flowers', label: 'Flowers', full: 'Flowers', kind: 'text', areas: ['service'], sourceKeys: ['flowers'] },
   { key: 'service_programs', label: 'Programs', full: 'Programs', kind: 'text', areas: ['service'], sourceKeys: ['programs'] },
+  { key: 'service_cemetery', label: 'Cemetery', full: 'Cemetery', kind: 'text', areas: ['service'], sourceKeys: ['cemetery'] },
+  { key: 'service_extra', label: 'Extra', full: 'Extra crew', kind: 'text', areas: ['service'], sourceKeys: ['extra'] },
 ];
 
 export const ARRANGEMENT_MILESTONES: MilestoneDef[] = [

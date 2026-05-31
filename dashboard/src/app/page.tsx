@@ -235,7 +235,7 @@ const locationGroups: Array<{ label: string; keys: string[] }> = [
 
 const MILESTONE_BY_KEY = new Map(ALL_MILESTONES.map((d) => [d.key, d] as const));
 // Drawer grouping: everything about the service in one editable block; intake/disposition in another.
-const SERVICE_SECTION_KEYS = ['service', 'service_time', 'service_location', 'service_type', 'service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_hearse', 'service_limo', 'service_casket', 'service_flowers', 'service_programs'];
+const SERVICE_SECTION_KEYS = ['service', 'service_time', 'service_location', 'service_type', 'service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_extra', 'service_hearse', 'service_limo', 'service_casket', 'service_color', 'service_flowers', 'service_programs', 'service_cemetery'];
 const NON_SERVICE_MILESTONE_KEYS = ['first_call', 'cremation', 'cremation_location', 'burial', 'burial_location'];
 const ARRANGEMENT_SECTION_KEYS = ARRANGEMENT_MILESTONES.map((def) => def.key);
 const DEATH_CERT_SECTION_KEYS = DEATH_CERT_MILESTONES.map((def) => def.key);
