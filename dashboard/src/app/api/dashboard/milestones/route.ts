@@ -1,32 +1,11 @@
 import { NextResponse } from 'next/server';
 import { isAuthError, requireStaff } from '@/lib/authz';
 import { getSql } from '@/lib/db';
+import { MILESTONE_KEY_ALLOWLIST } from '@/lib/milestone-definitions';
 
 export const runtime = 'nodejs';
 
-const MILESTONE_KEYS = new Set([
-  'first_call',
-  'service',
-  'cremation',
-  'burial',
-  'service_location',
-  'cremation_location',
-  'burial_location',
-  'service_type',
-  'service_time',
-  'service_lead',
-  'service_lady',
-  'service_call',
-  'service_arrival',
-  'service_hearse',
-  'service_limo',
-  'service_casket',
-  'service_flowers',
-  'service_programs',
-  'cremation_number',
-  'mokan_number',
-  'dc_number',
-]);
+const MILESTONE_KEYS = new Set(MILESTONE_KEY_ALLOWLIST);
 
 export async function GET() {
   const session = await requireStaff();

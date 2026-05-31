@@ -242,6 +242,9 @@ async function main() {
     await drawer.waitFor({ timeout: 10000 });
     await expectText(page, 'Family detail');
     await page.getByRole('button', { name: /^Source evidence$/ }).waitFor({ timeout: 5000 });
+    for (const section of ['Arrangements', 'Death certificate', 'Crematory / MoKan', 'Cremains & belongings']) {
+      await expectText(page, section);
+    }
     const firstPaintText = await drawer.innerText();
     assert(!/Loading all linked rows and files/i.test(firstPaintText), 'drawer blocks on linked rows/files loading message');
     const openSections = await drawer.locator('details[open]').count();

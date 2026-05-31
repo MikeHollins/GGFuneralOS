@@ -11,6 +11,8 @@
     "db:migrate": "tsx src/db/push-schema.ts && echo 'Running migration...' && tsx -e \"require('./src/db/client').sql(require('fs').readFileSync('src/db/migrations/001-upgrade-tables.sql','utf8'))\"",
     "db:seed": "tsx src/db/seed.ts",
     "sync:smb": "tsx src/workers/smb-readonly-sync.ts",
+    "report:master-sheet-parity": "node scripts/report-master-sheet-parity.mjs",
+    "check:master-sheet-parity": "node scripts/report-master-sheet-parity.mjs --fail-on-unclassified",
     "smoke:dashboard": "node scripts/smoke-dashboard.mjs"
   },
   "dependencies": {
