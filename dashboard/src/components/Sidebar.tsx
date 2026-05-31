@@ -56,6 +56,17 @@ export function Sidebar() {
     }
   }, []);
 
+  // The Schedule overlay lives in the dashboard page (a sibling tree). On the dashboard, open it via
+  // a window event; from any other route, navigate to the dashboard with ?panel=schedule so it opens.
+  function openSchedule() {
+    if (typeof window === 'undefined') return;
+    if (window.location.pathname !== '/') {
+      window.location.href = '/?panel=schedule';
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('ggfo:open-schedule'));
+  }
+
   function toggleCollapsed() {
     setCollapsed((prev) => {
       const next = !prev;
@@ -89,8 +100,7 @@ export function Sidebar() {
         </button>
       </div>
       <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-        {/* Schedule drawer is intentionally not wired yet — this is just the menu entry. */}
-        <SidebarItem label="Schedule" icon={<ScheduleIcon />} collapsed={collapsed} onClick={() => {}} />
+        <SidebarItem label="Schedule" icon={<ScheduleIcon />} collapsed={collapsed} onClick={openSchedule} />
       </nav>
     </aside>
   );

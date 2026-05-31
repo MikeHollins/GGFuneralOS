@@ -2091,6 +2091,141 @@ function promptInitials() {
   return initials;
 }
 
+// ---- Service Schedule overlay ----------------------------------------------------------------
+const SCHEDULE_MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+// Parse the informal service date ("June 12th") to a sortable timestamp; rolls a long-past month to
+// next year since the schedule is forward-looking. Returns null when unparseable (sorted last).
+function parseServiceDate(value: string): number | null {
+  const m = (value || '').toLowerCase().match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{1,2})/);
+  if (!m) return null;
+  const day = Number(m[2]);
+  const now = new Date();
+  let when = new Date(now.getFullYear(), SCHEDULE_MONTHS[m[1]], day).getTime();
+  if (when < now.getTime() - 60 * 86400000) when = new Date(now.getFullYear() + 1, SCHEDULE_MONTHS[m[1]], day).getTime();
+  return when;
+}
+// A real service has a person's name; the sheet sometimes carries a stray note row ("Viewing 12-1pm").
+function isServiceNote(name: string): boolean {
+  return /\d/.test(name) || /^(viewing|visitation|graveside|service|repast)\b/i.test(name.trim());
+}
+
+const SCHEDULE_WHEN_KEYS = ['service', 'service_time', 'service_location', 'service_cemetery', 'service_type'];
+const SCHEDULE_CREW_KEYS = ['service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_extra'];
+const SCHEDULE_LOGISTICS_KEYS = ['service_casket', 'service_color', 'service_flowers', 'service_programs', 'service_hearse', 'service_limo'];
+
+// Compact one-line editable field — keeps the whole service on one screen (no scroll), tap to edit.
+function ScheduleField({ record, def, overrides, onCommit }: { record: CaseRecord; def: MilestoneDef; overrides: MilestoneOverrideMap; onCommit: CommitMilestone }) {
+  const eff = effectiveMilestone(record, def, overrides);
+  const display = eff.state === 'na' ? 'N/A' : eff.value;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 rounded-md border border-[#efb70c]/60 bg-[#fffaf0] px-1.5 py-1">
+        <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-500">{def.label}</span>
+        <input
+          autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
+          className="h-6 min-w-0 flex-1 rounded border border-neutral-300 px-1 text-xs outline-none focus:border-[#efb70c]"
+        />
+        <button type="button" disabled={busy} onClick={async () => { const init = promptInitials(); if (!init) return; setBusy(true); try { await onCommit(record, def, draft, false, init); setEditing(false); } finally { setBusy(false); } }} className="shrink-0 text-[10px] font-bold text-emerald-700 disabled:opacity-50">Save</button>
+        <button type="button" onClick={() => setEditing(false)} className="shrink-0 text-[11px] text-neutral-400">✕</button>
+      </div>
+    );
+  }
+  return (
+    <button type="button" onClick={() => { setDraft(eff.state === 'set' ? eff.value : ''); setEditing(true); }} title={`Edit ${def.full}`}
+      className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-[#fff7d7]">
+      <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">{def.label}</span>
+      <span className={`min-w-0 flex-1 truncate text-xs ${display ? (eff.overridden ? 'font-semibold text-[#a77d00]' : 'text-neutral-900') : 'text-neutral-300'}`}>{display || '—'}</span>
+    </button>
+  );
+}
+
+function ScheduleFieldGroup({ title, keys, record, overrides, onCommit, cols }: { title: string; keys: string[]; record: CaseRecord; overrides: MilestoneOverrideMap; onCommit: CommitMilestone; cols: string }) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-neutral-400">{title}</div>
+      <div className={`grid gap-x-2 gap-y-0.5 ${cols}`}>
+        {keys.map((k) => MILESTONE_BY_KEY.get(k)).filter((d): d is MilestoneDef => Boolean(d)).map((def) => (
+          <ScheduleField key={def.key} record={record} def={def} overrides={overrides} onCommit={onCommit} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Full-screen Schedule view: services down the left, the selected service's full editable detail on
+// the right (single column + back button on mobile). Organized by service; every field editable.
+function ScheduleOverlay({ records, overrides, onCommit, onClose }: { records: CaseRecord[]; overrides: MilestoneOverrideMap; onCommit: CommitMilestone; onClose: () => void }) {
+  const [query, setQuery] = useState('');
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  const services = useMemo(() => {
+    return records
+      .filter((r) => r.items.some((i) => i.area === 'service') && !isServiceNote(r.name))
+      .map((r) => {
+        const date = effectiveMilestone(r, MILESTONE_BY_KEY.get('service')!, overrides).value;
+        const time = effectiveMilestone(r, MILESTONE_BY_KEY.get('service_time')!, overrides).value;
+        const location = effectiveMilestone(r, MILESTONE_BY_KEY.get('service_location')!, overrides).value;
+        return { record: r, date, time, location, sort: parseServiceDate(date) ?? Number.MAX_SAFE_INTEGER };
+      })
+      .sort((a, b) => a.sort - b.sort || a.record.name.localeCompare(b.record.name));
+  }, [records, overrides]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return services;
+    return services.filter((s) => s.record.searchText.includes(q) || milestoneSearchText(s.record, overrides).toLowerCase().includes(q));
+  }, [services, query, overrides]);
+
+  const selected = (selectedKey && services.find((s) => s.record.key === selectedKey)) || null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
+        <button type="button" onClick={onClose} aria-label="Close schedule" className="flex h-8 w-8 items-center justify-center rounded-md text-lg text-neutral-500 transition hover:bg-neutral-100">✕</button>
+        <h2 className="text-sm font-bold text-neutral-950">Service Schedule</h2>
+        <span className="hidden text-xs text-neutral-400 sm:inline">{filtered.length} service{filtered.length === 1 ? '' : 's'}</span>
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find by name, staff, church…" aria-label="Search services" className="ml-auto h-8 w-40 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 text-xs outline-none focus:border-[#efb70c] sm:w-64" />
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <div className={`w-full overflow-y-auto border-r border-neutral-200 md:w-72 md:shrink-0 ${selected ? 'max-md:hidden' : ''}`}>
+          {filtered.length === 0 ? (
+            <div className="p-4 text-sm text-neutral-500">No services scheduled.</div>
+          ) : filtered.map((s) => (
+            <button key={s.record.key} type="button" onClick={() => setSelectedKey(s.record.key)}
+              className={`flex w-full flex-col gap-0.5 border-b border-neutral-100 px-3 py-2 text-left transition hover:bg-neutral-50 ${selected?.record.key === s.record.key ? 'bg-[#fff7d7]' : ''}`}>
+              <span className="truncate text-sm font-bold text-neutral-950">{s.record.name}</span>
+              <span className="truncate text-xs text-neutral-600">{[s.date, s.time].filter(Boolean).join(' · ') || 'Date TBD'}</span>
+              <span className="truncate text-[11px] text-neutral-400">{s.location || '—'}</span>
+            </button>
+          ))}
+        </div>
+        <div className={`min-h-0 flex-1 overflow-y-auto p-3 ${selected ? '' : 'max-md:hidden'}`}>
+          {selected ? (
+            <div className="flex flex-col gap-3">
+              <div>
+                <button type="button" onClick={() => setSelectedKey(null)} className="mb-1 text-xs font-semibold text-neutral-500 md:hidden">← All services</button>
+                <div className="text-lg font-bold text-neutral-950">{selected.record.name}</div>
+                <div className="text-sm text-neutral-600">{[selected.date, selected.time, selected.location].filter(Boolean).join(' · ') || 'Details below'}</div>
+              </div>
+              <ScheduleFieldGroup title="When & where" keys={SCHEDULE_WHEN_KEYS} record={selected.record} overrides={overrides} onCommit={onCommit} cols="grid-cols-1 sm:grid-cols-2 xl:grid-cols-3" />
+              <ScheduleFieldGroup title="Crew & roles" keys={SCHEDULE_CREW_KEYS} record={selected.record} overrides={overrides} onCommit={onCommit} cols="grid-cols-2 xl:grid-cols-3" />
+              <ScheduleFieldGroup title="Logistics" keys={SCHEDULE_LOGISTICS_KEYS} record={selected.record} overrides={overrides} onCommit={onCommit} cols="grid-cols-2 xl:grid-cols-3" />
+            </div>
+          ) : (
+            <div className="hidden h-full items-center justify-center text-sm text-neutral-400 md:flex">Select a service to see its details.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkflowStepButton({
   record,
   state,
@@ -3417,6 +3552,19 @@ export default function BoardPage() {
   const [sheetSyncing, setSheetSyncing] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [firstCallOpen, setFirstCallOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  // The left sidebar's Schedule item lives in AppShell (a sibling tree), so it opens this overlay via
+  // a window event; arriving with ?panel=schedule (e.g. from another route) opens it too.
+  useEffect(() => {
+    function open() {
+      setScheduleOpen(true);
+      loadOperationsFeed({ source: 'Weekly Service Schedule', merge: true, limit: 500 });
+    }
+    window.addEventListener('ggfo:open-schedule', open);
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('panel') === 'schedule') open();
+    return () => window.removeEventListener('ggfo:open-schedule', open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [mobileHeaderVisible, setMobileHeaderVisible] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const operationsRequestRef = useRef(0);
@@ -4248,6 +4396,15 @@ export default function BoardPage() {
             loadOperationsFeed({ query: '' });
             setSelectedKey(created.case_key);
           }}
+        />
+      ) : null}
+
+      {scheduleOpen ? (
+        <ScheduleOverlay
+          records={caseRecords}
+          overrides={milestoneOverrides}
+          onCommit={commitMilestone}
+          onClose={() => setScheduleOpen(false)}
         />
       ) : null}
 
