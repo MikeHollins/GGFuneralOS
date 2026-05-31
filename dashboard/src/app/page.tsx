@@ -2176,6 +2176,84 @@ function WorkflowProgressCell({
   );
 }
 
+function MobileCaseSummary({
+  record,
+  identityRefOverrides,
+  milestoneOverrides,
+  states,
+}: {
+  record: CaseRecord;
+  identityRefOverrides: IdentityRefOverrideMap;
+  milestoneOverrides: MilestoneOverrideMap;
+  states: EffectiveStepState[];
+}) {
+  const caseRef = canonicalCaseRef(record);
+  const isFirstCall = record.items.some((item) => item.source === 'First Call');
+  const caseLabel = caseRef || (isFirstCall ? 'New' : 'No #');
+  const refs = effectiveCaseRefs(record, identityRefOverrides).filter((state) => state.state === 'set' || state.state === 'source');
+  const hasWorkflow = states.length > 0;
+  const doneCount = states.filter((state) => state.done).length;
+  const gapLabels = states.filter((state) => state.gap && !state.done).map((state) => state.step.gridLabel).slice(0, 3);
+  const openLabels = states.filter((state) => !state.done && !state.gap).map((state) => state.step.gridLabel).slice(0, 3);
+  const serviceDate = effectiveMilestone(record, MILESTONE_BY_KEY.get('service')!, milestoneOverrides);
+  const serviceTime = effectiveMilestone(record, MILESTONE_BY_KEY.get('service_time')!, milestoneOverrides);
+  const cremationDate = effectiveMilestone(record, MILESTONE_BY_KEY.get('cremation')!, milestoneOverrides);
+  const burialDate = effectiveMilestone(record, MILESTONE_BY_KEY.get('burial')!, milestoneOverrides);
+  const scheduleLines = [
+    compactScheduleLine('Service', serviceDate, serviceTime),
+    compactScheduleLine('Cremation', cremationDate),
+    compactScheduleLine('Burial', burialDate),
+  ].filter(Boolean);
+
+  return (
+    <div className="border-l-4 border-l-neutral-400 px-3 py-2.5">
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="shrink-0 rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-1 font-mono leading-none">
+          <div className="text-[8px] font-black uppercase text-neutral-400">Case #</div>
+          <div className="mt-0.5 text-[12px] font-black text-neutral-950">{caseLabel}</div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-black leading-tight text-neutral-950">{record.name}</div>
+          <div className="mt-1 truncate text-[11px] font-semibold leading-tight text-neutral-500">
+            DOB {record.dateOfBirth ? formatTransitionDate(record.dateOfBirth) : '...'} · Transition {record.dateOfTransition ? formatTransitionDate(record.dateOfTransition) : '...'}
+          </div>
+        </div>
+      </div>
+
+      {refs.length ? (
+        <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+          {refs.map((state) => (
+            <span key={state.def.key} className="min-w-0 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[11px] font-bold leading-none text-emerald-900">
+              <span className="text-[9px] uppercase opacity-70">{state.def.label}</span> {state.value}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-2 min-w-0 text-[12px] font-semibold leading-tight text-neutral-700">
+        {scheduleLines.length ? scheduleLines.join(' · ') : <span className="italic text-neutral-400">No schedule dates</span>}
+      </div>
+
+      <div className="mt-2 flex min-w-0 items-center gap-2">
+        <span className={`shrink-0 rounded-md border px-2 py-1 text-[11px] font-black leading-none ${!hasWorkflow ? 'border-neutral-200 bg-neutral-50 text-neutral-500' : doneCount === states.length ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : gapLabels.length ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          {hasWorkflow ? `${doneCount}/${states.length} done` : 'Loading'}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-neutral-500">
+          {!hasWorkflow ? 'Checklist loading' : gapLabels.length ? `Needs ${gapLabels.join(', ')}` : openLabels.length ? `Open ${openLabels.join(', ')}` : 'Checklist complete'}
+        </span>
+        {record.updatedAt ? <span className="shrink-0 text-[10px] font-semibold text-neutral-400">{record.updatedAt}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function compactScheduleLine(label: string, dateState: MilestoneState, timeState?: MilestoneState) {
+  const date = dateState.state === 'set' || dateState.state === 'source' ? dateState.value : '';
+  const time = timeState && (timeState.state === 'set' || timeState.state === 'source') ? timeState.value : '';
+  const value = [date, time].filter(Boolean).join(' ');
+  return value ? `${label} ${value}` : '';
+}
+
 function HeaderMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="h-8 rounded-md border border-neutral-200 bg-white px-2 py-1 text-right leading-tight">
@@ -4111,15 +4189,23 @@ export default function BoardPage() {
                 }}
                 role="button"
                 tabIndex={0}
-                className="grid w-full cursor-pointer grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] items-stretch text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none max-lg:grid-cols-[104px_minmax(0,1fr)]"
+                className="w-full cursor-pointer text-left transition hover:bg-[#faf9f9] focus:bg-[#fff7d7] focus:outline-none lg:grid lg:grid-cols-[minmax(88px,0.5fr)_minmax(240px,1.35fr)_minmax(300px,2fr)_minmax(300px,1.8fr)] lg:items-stretch"
                 aria-label={`Open details for ${record.name}`}
               >
-                <CaseNumberCell record={record} />
-                <DeceasedCell record={record} identityRefOverrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
-                <div className="px-1 py-1.5 max-lg:col-span-2">
-                  <ScheduleCell record={record} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                <div className="lg:hidden">
+                  <MobileCaseSummary
+                    record={record}
+                    identityRefOverrides={milestoneOverrides}
+                    milestoneOverrides={milestoneOverrides}
+                    states={workflowStateByKey.get(record.key) ?? []}
+                  />
                 </div>
-                <div className="max-lg:col-span-2">
+                <div className="hidden lg:contents">
+                  <CaseNumberCell record={record} />
+                  <DeceasedCell record={record} identityRefOverrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                  <div className="px-1 py-1.5">
+                    <ScheduleCell record={record} overrides={milestoneOverrides} onOpen={() => setSelectedKey(record.key)} />
+                  </div>
                   <WorkflowProgressCell
                     record={record}
                     states={workflowStateByKey.get(record.key) ?? []}

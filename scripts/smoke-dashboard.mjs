@@ -203,6 +203,37 @@ async function main() {
     assert(/Cremation #|MoKan #|DC Case/i.test(gridText), 'deceased cell does not show case-reference evidence');
   });
 
+  await check('mobile case list uses compact summary rows', async () => {
+    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    await mobileContext.addCookies(await page.context().cookies(baseUrl));
+    const mobilePage = await mobileContext.newPage();
+    watchSourceWrites(mobilePage);
+    try {
+      await mobilePage.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await waitForDashboardRows(mobilePage);
+      await mobilePage.waitForFunction(() =>
+        Array.from(document.querySelectorAll('main [role="button"][aria-label^="Open details for"]')).some((row) =>
+          /\d+\/[1-9]\d*\s+done/i.test(row.textContent || ''),
+        ),
+      );
+      const firstRow = mobilePage.locator('main [role="button"][aria-label^="Open details for"]').first();
+      const rowBox = await firstRow.boundingBox();
+      assert(rowBox && rowBox.height <= 180, `mobile row is still too tall: ${rowBox?.height ?? 'missing'}px`);
+      const visibleNestedButtons = await firstRow.locator('button').evaluateAll((buttons) =>
+        buttons.filter((button) => {
+          const style = getComputedStyle(button);
+          return style.display !== 'none' && style.visibility !== 'hidden' && Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length);
+        }).length,
+      );
+      assert(visibleNestedButtons === 0, `mobile row still exposes ${visibleNestedButtons} nested grid buttons`);
+      const rowText = await firstRow.innerText();
+      assert(/Case #/i.test(rowText), 'mobile row lost case number');
+      assert(/\d+\/[1-9]\d*\s+done/i.test(rowText), 'mobile row lost checklist progress summary');
+    } finally {
+      await mobileContext.close();
+    }
+  });
+
   await check('priority designations are absent from dashboard surface', async () => {
     const bodyText = await page.locator('body').innerText();
     assert(!/\bPriority\b/i.test(bodyText), 'found Priority text');
