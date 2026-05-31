@@ -2111,6 +2111,13 @@ function isServiceNote(name: string): boolean {
   return /\d/.test(name) || /^(viewing|visitation|graveside|service|repast)\b/i.test(name.trim());
 }
 
+// Clearer, collision-free labels for the schedule view (the milestone defs reuse "Service" for date,
+// location, and package, which is ambiguous in this dense layout).
+const SCHEDULE_LABELS: Record<string, string> = {
+  service: 'Date', service_time: 'Time', service_location: 'Location', service_cemetery: 'Cemetery', service_type: 'Package',
+  service_lead: 'Lead', service_lady: 'Lady', service_call: 'Call', service_arrival: 'Arrival', service_extra: 'Extra',
+  service_casket: 'Casket', service_color: 'Color', service_flowers: 'Flowers', service_programs: 'Programs', service_hearse: 'Hearse', service_limo: 'Limo',
+};
 const SCHEDULE_WHEN_KEYS = ['service', 'service_time', 'service_location', 'service_cemetery', 'service_type'];
 const SCHEDULE_CREW_KEYS = ['service_lead', 'service_lady', 'service_call', 'service_arrival', 'service_extra'];
 const SCHEDULE_LOGISTICS_KEYS = ['service_casket', 'service_color', 'service_flowers', 'service_programs', 'service_hearse', 'service_limo'];
@@ -2125,7 +2132,7 @@ function ScheduleField({ record, def, overrides, onCommit }: { record: CaseRecor
   if (editing) {
     return (
       <div className="flex items-center gap-1 rounded-md border border-[#efb70c]/60 bg-[#fffaf0] px-1.5 py-1">
-        <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-500">{def.label}</span>
+        <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-500">{SCHEDULE_LABELS[def.key] ?? def.label}</span>
         <input
           autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
@@ -2139,7 +2146,7 @@ function ScheduleField({ record, def, overrides, onCommit }: { record: CaseRecor
   return (
     <button type="button" onClick={() => { setDraft(eff.state === 'set' ? eff.value : ''); setEditing(true); }} title={`Edit ${def.full}`}
       className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-[#fff7d7]">
-      <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">{def.label}</span>
+      <span className="w-14 shrink-0 truncate text-[9px] font-bold uppercase tracking-wide text-neutral-400">{SCHEDULE_LABELS[def.key] ?? def.label}</span>
       <span className={`min-w-0 flex-1 truncate text-xs ${display ? (eff.overridden ? 'font-semibold text-[#a77d00]' : 'text-neutral-900') : 'text-neutral-300'}`}>{display || '—'}</span>
     </button>
   );
