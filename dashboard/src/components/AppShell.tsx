@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
+import { Sidebar } from './Sidebar';
 
 function publicPath(pathname: string) {
   return pathname === '/login' || pathname.startsWith('/claim/') || pathname.startsWith('/portal/');
@@ -14,6 +15,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <main data-dashboard-scroll-root className="min-w-0 flex-1 overflow-auto">{children}</main>
+    <>
+      <Sidebar />
+      <main data-dashboard-scroll-root className="min-w-0 flex-1 overflow-auto">{children}</main>
+    </>
   );
 }
