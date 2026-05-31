@@ -34,6 +34,7 @@ import {
   type MilestoneDef,
 } from '@/lib/milestone-definitions';
 import { deathCertDeadline, type DashboardItem, type OperationArea } from '@/lib/operation-items';
+import { sourceFieldDefinition, type SourceFieldCategory } from '@/lib/source-field-registry';
 import { FirstCallDrawer } from './first-call-drawer';
 
 type AuditEntry = {
@@ -3187,6 +3188,57 @@ function WorkflowChecklist({
   );
 }
 
+// Source fields the parity registry routes to the drawer, surfaced per case with their registry
+// labels, grouped by category. Service fields are excluded here — they live in the editable Service
+// section above. Read-only display from the source sheets (registry marks them editable; turning
+// these into editable overrides is a follow-up via the same milestone-override path).
+const DRAWER_FIELD_GROUPS: Array<{ category: SourceFieldCategory; title: string }> = [
+  { category: 'death_certificate', title: 'Death certificate' },
+  { category: 'crematory', title: 'Crematory' },
+  { category: 'cremains', title: 'Cremains' },
+  { category: 'belongings', title: 'Belongings' },
+  { category: 'arrangements', title: 'Arrangements' },
+];
+
+function SourceDrawerFields({ record }: { record: CaseRecord }) {
+  const byKey = new Map<string, { label: string; value: string; category: SourceFieldCategory }>();
+  for (const item of record.items) {
+    const payload = sourcePayload(item);
+    for (const [key, raw] of Object.entries(payload)) {
+      if (byKey.has(key)) continue;
+      const value = cleanDisplay(raw).trim();
+      if (!value) continue;
+      const def = sourceFieldDefinition(key);
+      if (def.destination !== 'drawer' || def.category === 'service') continue;
+      byKey.set(key, { label: def.label, value, category: def.category });
+    }
+  }
+  if (byKey.size === 0) return null;
+  const groups = DRAWER_FIELD_GROUPS
+    .map((g) => ({ ...g, fields: [...byKey.values()].filter((f) => f.category === g.category) }))
+    .filter((g) => g.fields.length);
+  if (!groups.length) return null;
+  return (
+    <DrawerDisclosure title="Case details" meta="Death certificate, crematory, cremains & belongings fields from the source sheets" bodyClassName="p-3">
+      <div className="space-y-3">
+        {groups.map((g) => (
+          <div key={g.category}>
+            <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-neutral-400">{g.title}</div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {g.fields.map((f) => (
+                <div key={f.label} className="rounded-md bg-neutral-50 px-2 py-1.5 text-xs">
+                  <div className="font-semibold text-neutral-500">{f.label}</div>
+                  <div className="break-words text-neutral-900">{f.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </DrawerDisclosure>
+  );
+}
+
 function DetailDrawer({
   record,
   statusOverrides,
@@ -3350,6 +3402,7 @@ function DetailDrawer({
           <div className="h-full min-h-0 space-y-2 overflow-y-auto px-3 pb-3 pt-3">
             <FamilyContactEditor record={record} overrides={contactOverrides} onCommitContact={onCommitContact} />
             <MilestoneEditor record={record} overrides={milestoneOverrides} onCommit={onCommitMilestone} />
+            <SourceDrawerFields record={record} />
             <WorkflowChecklist
               record={record}
               statusOverrides={statusOverrides}
